@@ -2,13 +2,14 @@ from collections import namedtuple
 import torch
 
 
-class Storage:
+class   Storage:
     def __init__(self, memory_size, keys=None):
         if keys is None:
             keys = []
         keys = keys + [
             "state",
             "action",
+            "theta",
             "reward_A",
             "reward_P",
             "mask",

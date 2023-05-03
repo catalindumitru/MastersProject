@@ -71,40 +71,12 @@ class DummyBody(nn.Module):
         return x
 
 
-class GridConvBody(nn.Module):
-    def __init__(self, in_channels=3, noisy_linear=False):
-        super(GridConvBody, self).__init__()
-        self.feature_dim = 256
-        self.conv1 = layer_init(nn.Conv2d(in_channels, 16, kernel_size=2, stride=2))
-        self.conv2 = layer_init(nn.Conv2d(16, 32, kernel_size=2, stride=1))
-        self.conv3 = layer_init(nn.Conv2d(32, 64, kernel_size=2, stride=1))
-        if noisy_linear:
-            self.fc4 = NoisyLinear(64, self.feature_dim)
-        else:
-            self.fc4 = layer_init(nn.Linear(64, self.feature_dim))
-        self.noisy_linear = noisy_linear
-
-    def reset_noise(self):
-        if self.noisy_linear:
-            self.fc4.reset_noise()
-
-    def forward(self, x):
-        print(x)
-        x = x.transpose(1, 3).transpose(2, 3)
-        y = F.relu(self.conv1(x))
-        y = F.relu(self.conv2(y))
-        y = F.relu(self.conv3(y))
-        y = y.view(y.size(0), -1)
-        y = F.relu(self.fc4(y))
-        return y
-
-
 class FCBody(nn.Module):
     def __init__(
         self, state_dim, hidden_units=(64, 64), gate=F.relu, noisy_linear=False
     ):
         super(FCBody, self).__init__()
-        dims = (1,) + hidden_units
+        dims = (2,) + hidden_units
         if noisy_linear:
             self.layers = nn.ModuleList(
                 [

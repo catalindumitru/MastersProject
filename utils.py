@@ -1,6 +1,7 @@
 import numpy as np
 import torch.nn as nn
 from torch import Tensor, from_numpy
+from torch.distributions import Categorical
 
 
 def random_distribution(n):
@@ -28,5 +29,9 @@ def layer_init(layer, w_scale=1.0):
     return layer
 
 
-def uniform_kernel():
-    pass
+def uniform_kernel(theta_count):
+    return Categorical(tensor(random_distribution(theta_count))).sample().unsqueeze(0)
+
+
+def kernel_without_principal(state, mu):
+    return Categorical(tensor(mu[state])).sample().unsqueeze(0)
