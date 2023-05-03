@@ -1,0 +1,4523 @@
+File: test_agent.py
+import torch.cuda
+from torch.utils.tensorboard.writer import SummaryWriter
+import pickle
+from parameters_experiments import *
+from deep_rl import *
+from deep_rl.utils.noise_generator import make_noise
+import os
+
+noise_list = {'MiniGrid-LavaGapS6-v0': {'bound': 2, 'var': 0.5},
+              'MiniGrid-Dynamic-Obstacles-6x6-v0': {'bound': 2, 'var': 0.5},
+              'MiniGrid-LavaCrossingS9N1-v0': {'bound': 1.5, 'var': 0.5}}
+
+if __name__ == '__main__':
+    con = Config()
+    dir = 'data'
+    models = []
+    stats = []
+    algos = []
+    envs = []
+    for file in os.listdir(dir):
+        if '.model' in file:
+            models.append(os.path.join(os.getcwd(),dir,file))
+            algo = file[file.find('algo_')+5:file.find('algo_')+8]
+            if algo == 'SAP':
+                algo = 'SAPPO'
+            elif algo == 'QA2':
+                algo = 'QA2C'
+            elif algo == 'DDP':
+                algo = 'DDPG'
+            algos.append(algo)
+            env = file[file.find('-')+1:file.find('-algo')]
+            envs.append(env)
+        elif '.stats' in file:
+            stats.append(os.path.join(os.getcwd(),dir,file))
+    for model, stat, alg, e in zip(models,stats,algos,envs):
+        agent = make_agent(algo=alg,game=e,robust=False)
+        agent.load(model.replace('.model',''))
+        noiseless = agent.eval_episodes()
+        unif_noise = agent.eval_noisy_episodes(mode=1,bound=noise_list[e]['bound'])
+        gaus_noise = agent.eval_noisy_episodes(mode=2,bound=noise_list[e]['bound'])
+        adv_noise = [agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)]
+        print("Results for model: ",model)
+        print("Average rewards for noiseless environment: ", noiseless)
+        print("Average rewards for uniform noise environment: ", unif_noise)
+        print("Average rewards for gaussian noise environment: ", gaus_noise)
+        print("Average rewards for adversarial noise environments: ", adv_noise)
+
+--------------------------------------------------------------------------------
+
+File: lrrl_experiments_SAPPO.py
+import torch.cuda
+from torch.utils.tensorboard.writer import SummaryWriter
+import pickle
+from parameters_experiments import *
+from deep_rl import *
+from deep_rl.utils.noise_generator import make_noise
+
+if __name__ == '__main__':
+    mkdir('log')
+    mkdir('tf_log')
+    set_one_thread()
+    seed = np.random.randint(int(1e6))
+    random_seed(seed)
+    results = {}
+    iterations = 10
+
+    game_list = ['MiniGrid-Dynamic-Obstacles-6x6-v0', 'MiniGrid-LavaGapS6-v0', 'MiniGrid-LavaCrossingS9N1-v0']
+    noise_list = {'MiniGrid-LavaGapS6-v0':{'bound':2,'var':0.5},
+                  'MiniGrid-Dynamic-Obstacles-6x6-v0':{'bound':2,'var':0.5},
+                  'MiniGrid-LavaCrossingS9N1-v0':{'bound':1.5,'var':0.5}}
+    for game in game_list:
+        results[game] = {'PPO_vanilla': {'noise':[],'no_noise':[],'final': {}},
+                         'PPO_SA_noise0': {'noise':[],'no_noise':[],'final':{}},
+                         'PPO_SA_noise2': {'noise':[],'no_noise':[],'final':{}},
+                         'seed':seed}
+          # no noise
+        for _ in range(iterations):
+            #SA-PPO Agents
+            agent = make_agent(game=game, algo='SAPPO', robust=True, noise=1,bound=noise_list[game]['bound'],var=noise_list[game]['var'])
+            run_steps(agent)
+            results[game]['PPO_SA_noise0']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['PPO_SA_noise0']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                            agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+            for key in results[game].keys():
+                try:
+                    zero_noise_median = np.median(results[game][key]['no_noise'])
+                    zero_noise_std = np.std(results[game][key]['no_noise'])
+                    unif_noise_median = np.median([i[0] for i in results[game][key]['noise']])
+                    unif_noise_std = np.std([i[0] for i in results[game][key]['noise']])
+                    gaus_noise_median = np.median([i[1] for i in results[game][key]['noise']])
+                    gaus_noise_std = np.std([i[1] for i in results[game][key]['noise']])
+                    noise_median_05 = np.median([i[2] for i in results[game][key]['noise']])
+                    noise_std_05 = np.std([i[2] for i in results[game][key]['noise']])
+                    noise_median_1 = np.median([i[3] for i in results[game][key]['noise']])
+                    noise_std_1 = np.std([i[3] for i in results[game][key]['noise']])
+                    noise_median_2 = np.median([i[4] for i in results[game][key]['noise']])
+                    noise_std_2 = np.std([i[4] for i in results[game][key]['noise']])
+                    results[game][key]['final'] = {'zero_noise_median': zero_noise_median,
+                                                   'zero_noise_std': zero_noise_std,
+                                                   'unif_noise_median': unif_noise_median,
+                                                   'unif_noise_std': unif_noise_std,
+                                                   'gaus_noise_median': gaus_noise_median,
+                                                   'gaus_noise_std': gaus_noise_std,
+                                                   'adv_noise_median': [noise_median_05, noise_median_1,
+                                                                        noise_median_2],
+                                                   'adv_noise_std': [noise_std_05, noise_std_1, noise_std_2]}
+                except:
+                    None
+            with open('results_FINAL_discrete_SAPPO_k1'+game+'.pickle','wb') as f:
+                pickle.dump(results,f)
+
+
+--------------------------------------------------------------------------------
+
+File: collector.py
+import os
+import glob
+
+# Set the directory where the Python files are located
+source_directory = './'
+
+# Set the name of the output file
+output_file_name = 'combined_code.txt'
+
+# Define the divider line that will separate code from different files
+divider_line = '\n\n' + '-' * 80 + '\n\n'
+
+# Function to collect Python files recursively
+def collect_python_files(path):
+    python_files = []
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            if file.endswith('.py'):
+                python_files.append(os.path.join(root, file))
+    return python_files
+
+# Collect all Python files in the directory and subdirectories
+python_files = collect_python_files(source_directory)
+
+# Open the output file
+with open(output_file_name, 'w') as output_file:
+    for file in python_files:
+        # Read the content of each Python file
+        with open(file, 'r') as input_file:
+            file_content = input_file.read()
+
+        # Write the file content to the output file with the divider line
+        output_file.write(f'File: {os.path.relpath(file, source_directory)}\n{file_content}{divider_line}')
+
+print(f'Combined code saved to {output_file_name}')
+
+
+--------------------------------------------------------------------------------
+
+File: lrrl_experiments_PPO.py
+import torch.cuda
+from torch.utils.tensorboard.writer import SummaryWriter
+import pickle
+from parameters_experiments import *
+from deep_rl import *
+from deep_rl.utils.noise_generator import make_noise
+
+if __name__ == '__main__':
+    mkdir('log')
+    mkdir('tf_log')
+    set_one_thread()
+    seed = np.random.randint(int(1e6))
+    random_seed(seed)
+    results = {}
+    iterations = 10
+
+    game_list = ['MiniGrid-Dynamic-Obstacles-6x6-v0', 'MiniGrid-LavaCrossingS9N1-v0', 'MiniGrid-LavaGapS6-v0']
+    noise_list = {'MiniGrid-LavaGapS6-v0':{'bound':2,'var':0.5},
+                  'MiniGrid-Dynamic-Obstacles-6x6-v0':{'bound':2,'var':0.5},
+                  'MiniGrid-LavaCrossingS9N1-v0':{'bound':1.5,'var':0.5}}
+    for game in game_list:
+        results[game] = {'PPO_vanilla': {'noise':[],'no_noise':[],'final': {}},
+                         'PPO_LRRL_noise0': {'noise':[],'no_noise':[],'final':{}},
+                         'PPO_LRRL_noise2': {'noise':[],'no_noise':[],'final':{}},
+                         'seed':seed}
+          # no noise
+        for _ in range(iterations):
+            #PPO Agents
+
+            # Noiseless training
+            agent = make_agent(game=game, algo='PPO', robust=False, noise=0)
+            run_steps(agent)
+            results[game]['PPO_vanilla']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['PPO_vanilla']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+            # Uniform noise training
+            agent = make_agent(game=game, algo='PPO', robust=True, noise=1,bound=noise_list[game]['bound'],var=noise_list[game]['var'])
+            run_steps(agent)
+            results[game]['PPO_LRRL_noise0']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['PPO_LRRL_noise0']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                              agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+
+            # Gaussean noise training
+            agent = make_agent(game=game, algo='PPO', robust=True, noise=2,bound=noise_list[game]['bound'],var=noise_list[game]['var'])
+            run_steps(agent)
+            results[game]['PPO_LRRL_noise2']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['PPO_LRRL_noise2']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                              agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+            for key in results[game].keys():
+                try:
+                    zero_noise_median = np.median(results[game][key]['no_noise'])
+                    zero_noise_std = np.std(results[game][key]['no_noise'])
+                    unif_noise_median = np.median([i[0] for i in results[game][key]['noise']])
+                    unif_noise_std = np.std([i[0] for i in results[game][key]['noise']])
+                    gaus_noise_median = np.median([i[1] for i in results[game][key]['noise']])
+                    gaus_noise_std = np.std([i[1] for i in results[game][key]['noise']])
+                    noise_median_05 = np.median([i[2] for i in results[game][key]['noise']])
+                    noise_std_05 = np.std([i[2] for i in results[game][key]['noise']])
+                    noise_median_1 = np.median([i[3] for i in results[game][key]['noise']])
+                    noise_std_1 = np.std([i[3] for i in results[game][key]['noise']])
+                    noise_median_2 = np.median([i[4] for i in results[game][key]['noise']])
+                    noise_std_2 = np.std([i[4] for i in results[game][key]['noise']])
+                    results[game][key]['final']={'zero_noise_median':zero_noise_median,
+                                                 'zero_noise_std':zero_noise_std,
+                                                 'unif_noise_median': unif_noise_median,
+                                                 'unif_noise_std': unif_noise_std,
+                                                 'gaus_noise_median': gaus_noise_median,
+                                                 'gaus_noise_std': gaus_noise_std,
+                                                 'adv_noise_median': [noise_median_05,noise_median_1,noise_median_2],
+                                                 'adv_noise_std': [noise_std_05,noise_std_1,noise_std_2]}
+                except:
+                    None
+            with open('results_FINAL_discrete_PPO_'+game+'.pickle','wb') as f:
+                pickle.dump(results,f)
+
+
+--------------------------------------------------------------------------------
+
+File: lrrl_experiments_A2C.py
+import torch.cuda
+from torch.utils.tensorboard.writer import SummaryWriter
+import pickle
+from parameters_experiments import *
+from deep_rl import *
+from deep_rl.utils.noise_generator import make_noise
+
+if __name__ == '__main__':
+    mkdir('log')
+    mkdir('tf_log')
+    set_one_thread()
+    seed = np.random.randint(int(1e6))
+    random_seed(seed)
+    # -1 is CPU, a positive integer is the index of GPU
+    if torch.cuda.is_available():
+        select_device(0)
+    else:
+        select_device(-1)
+    results = {}
+    iterations = 10
+
+    game_list = ['MiniGrid-LavaCrossingS9N1-v0','MiniGrid-Dynamic-Obstacles-6x6-v0', 'MiniGrid-LavaGapS6-v0']
+
+    for game in game_list:
+        results[game] = {'PPO_vanilla': {'noise':[],'no_noise':[],'final':{}},
+                         'PPO_LRRL_noise0': {'noise':[],'no_noise':[],'final':{}},
+                         'PPO_LRRL_noise2': {'noise':[],'no_noise':[],'final':{}},
+                         'A2C_vanilla': {'noise':[],'no_noise':[],'final':{}},
+                         'A2C_LRRL_noise0': {'noise':[],'no_noise':[],'final':{}},
+                         'A2C_LRRL_noise2': {'noise':[],'no_noise':[],'final':{}},
+                         'DDPG_vanilla': {'noise':[],'no_noise':[],'final':{}},
+                         'DDPG_LRRL_noise0': {'noise':[],'no_noise':[],'final':{}},
+                         'DDPG_LRRL_noise2': {'noise':[],'no_noise':[],'final':{}},
+                         'seed':seed}
+        noise_list = {'MiniGrid-LavaGapS6-v0': {'bound': 2, 'var': 0.5},
+                      'MiniGrid-Dynamic-Obstacles-6x6-v0': {'bound': 2, 'var': 0.5},
+                      'MiniGrid-LavaCrossingS9N1-v0': {'bound': 1.5, 'var': 0.5}}
+          # no noise
+        for _ in range(iterations):
+            # A2C Agents
+
+            # Noiseless training
+            agent = make_agent(game=game,algo='A2C',robust=False,noise=0)
+            run_steps(agent)
+            results[game]['A2C_vanilla']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['A2C_vanilla']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+
+            # Uniform noise training
+            agent = make_agent(game=game,algo='A2C',robust=True,noise=1,bound=noise_list[game]['bound'],var=noise_list[game]['var'])
+            run_steps(agent)
+            results[game]['A2C_LRRL_noise0']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['A2C_LRRL_noise0']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                              agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+
+            # Gaussean noise training
+            agent = make_agent(game=game,algo='A2C',robust=True,noise=2,bound=noise_list[game]['bound'],var=noise_list[game]['var'])
+            run_steps(agent)
+            results[game]['A2C_LRRL_noise2']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['A2C_LRRL_noise2']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                              agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+
+            for key in results[game].keys():
+                try:
+                    zero_noise_median = np.median(results[game][key]['no_noise'])
+                    zero_noise_std = np.std(results[game][key]['no_noise'])
+                    unif_noise_median = np.median([i[0] for i in results[game][key]['noise']])
+                    unif_noise_std = np.std([i[0] for i in results[game][key]['noise']])
+                    gaus_noise_median = np.median([i[1] for i in results[game][key]['noise']])
+                    gaus_noise_std = np.std([i[1] for i in results[game][key]['noise']])
+                    noise_median_05 = np.median([i[2] for i in results[game][key]['noise']])
+                    noise_std_05 = np.std([i[2] for i in results[game][key]['noise']])
+                    noise_median_1 = np.median([i[3] for i in results[game][key]['noise']])
+                    noise_std_1 = np.std([i[3] for i in results[game][key]['noise']])
+                    noise_median_2 = np.median([i[4] for i in results[game][key]['noise']])
+                    noise_std_2 = np.std([i[4] for i in results[game][key]['noise']])
+                    results[game][key]['final'] = {'zero_noise_median': zero_noise_median,
+                                                   'zero_noise_std': zero_noise_std,
+                                                   'unif_noise_median': unif_noise_median,
+                                                   'unif_noise_std': unif_noise_std,
+                                                   'gaus_noise_median': gaus_noise_median,
+                                                   'gaus_noise_std': gaus_noise_std,
+                                                   'adv_noise_median': [noise_median_05, noise_median_1,
+                                                                        noise_median_2],
+                                                   'adv_noise_std': [noise_std_05, noise_std_1, noise_std_2]}
+                except:
+                    None
+
+            with open('results_FINAL_discrete_A2C_'+game+'.pickle','wb') as f:
+                pickle.dump(results,f)
+
+
+--------------------------------------------------------------------------------
+
+File: parameters_experiments.py
+import torch
+
+from deep_rl import *
+from deep_rl.utils.noise_generator import make_noise
+env_list = {'mujoco':['Pendulum-v0','Hopper-v2','Ant-v3','Walker2d-v2'],
+            'gridsafety': ['MiniGrid-DistShift2-v0','MiniGrid-DistShift1-v0',
+                           'MiniGrid-LavaGapS5-v0','MiniGrid-LavaGapS6-v0','MiniGrid-LavaGapS7-v0',
+                           'MiniGrid-LavaCrossingS9N1-v0','MiniGrid-LavaCrossingS9N2-v0',
+                           'MiniGrid-LavaCrossingS9N3-v0','MiniGrid-LavaCrossingS11N5-v0',
+                           'MiniGrid-Dynamic-Obstacles-5x5-v0','MiniGrid-Dynamic-Obstacles-Random-5x5-v0',
+                           'MiniGrid-Dynamic-Obstacles-6x6-v0','MiniGrid-Dynamic-Obstacles-Random-6x6-v0',
+                           'MiniGrid-Dynamic-Obstacles-8x8-v0','MiniGrid-Dynamic-Obstacles-16x16-v0']}
+
+def make_agent(**kwargs):
+    generate_tag(kwargs)
+    game = kwargs['game']
+    algo = kwargs['algo']
+    robust = kwargs['robust']
+    if robust:
+        noise = kwargs['noise']
+        bound = kwargs['bound']
+        var = kwargs['var']
+    else:
+        noise = None
+        bound = None
+        var = None
+    pre_set_parameters = False
+    kwargs.setdefault('log_level', 0)
+    for key in env_list.keys():
+        if game in env_list[key]:
+            pre_set_parameters = True
+            config = load_config(key,algo,game,robust,noise,bound=bound,var=var)
+    if not pre_set_parameters: #load
+        raise "Configuration not found."
+    noisefun = config.noise
+    config.merge(kwargs)
+    if algo == 'PPO':
+        return PPOAgent(config,noise=noisefun)
+    elif algo == 'A2C':
+        return A2CAgent(config,noise=noisefun)#A2CAgent(config,noise=noisefun)
+    elif algo == 'QA2C':
+        return QA2CAgent(config,noise=noisefun)
+    elif algo == 'SAPPO':
+        return SAPPOAgent(config,noise=noisefun)
+    else:
+        return DDPGAgent(config,noise=noisefun)
+
+
+def load_config(tag,algo,game,robust,noise,bound=None,var=None):
+    if tag == 'mujoco':
+        return mujoco_con(algo,game,robust,noise,bound=bound,var=var)
+    elif tag=='gridsafety':
+        return gridsafety_con(algo,game,robust,noise,bound=bound,var=var)
+    else:
+        print("Environment for"+str(game)+ 'not found')
+
+def mujoco_con(algo,game,robust=False,noise=None,bound=None,var=None):
+    con = Config()
+    if torch.cuda.is_available():
+        con.DEVICE = torch.device('cuda:%d' % (0))
+    else:
+        con.DEVICE = torch.device('cpu')
+    if robust:
+        con.lexico = True
+        con.noise_mode = noise
+        con.noise = make_noise(game, variance=var,mode=noise, bound=bound)
+    else:
+        con.lexico = False
+        con.noise = None
+    if algo=='PPO':
+        con.clip_rewards = False
+        con.task_fn = lambda: Task(game,clip_rewards=con.clip_rewards,wrapper='mujoco')
+        con.eval_env = Task(game,wrapper=None)
+        con.actor_opt_fn = lambda params: torch.optim.Adam(params, 3e-4, eps=1e-5)
+        con.critic_opt_fn = lambda params: torch.optim.Adam(params, 1.5e-4, eps=1e-5)
+        con.network_fn = lambda: GaussianActorCriticNet(
+            con.state_dim, con.action_dim, actor_body=FCBody(con.state_dim,(64,64), gate=torch.tanh),
+            critic_body=FCBody(con.state_dim,(64,64), gate=torch.tanh))
+        con.state_normalizer = MeanStdNormalizer()
+        con.reward_normalizer = RescaleNormalizer()
+        con.discount = 0.99
+        con.use_gae = True
+        con.gae_tau = 0.95
+        con.rollout_length = 2048
+        con.entropy_weight = 0
+        con.value_loss_weight = 0.1
+        con.optimization_epochs = 10
+        con.mini_batch_size = 32
+        con.ppo_ratio_clip = 0.2
+        con.log_interval = 1000
+        con.eval_interval = 10000
+        con.max_steps = int(2e6)
+        con.target_kl = 0.01
+        con.decaying_lr = True
+
+    elif algo == 'DDPG':
+        con.clip_rewards = False
+        con.task_fn = lambda: Task(game, clip_rewards=con.clip_rewards,wrapper='mujoco')
+        con.eval_env = Task(game)
+        con.max_steps = int(2e6)
+        con.eval_episodes = 20
+        con.network_fn = lambda: DeterministicActorCriticNet(
+            con.state_dim, con.action_dim,
+            actor_body=FCBody(con.state_dim, (400, 300), gate=F.relu),
+            critic_body=FCBody(con.state_dim + con.action_dim, (400, 300), gate=F.relu),
+            actor_opt_fn=lambda params: torch.optim.Adam(params, lr=1e-4),
+            critic_opt_fn=lambda params: torch.optim.Adam(params, lr=1e-4))
+        con.state_normalizer = MeanStdNormalizer()
+        con.replay_fn = lambda: UniformReplay(memory_size=int(1000000), batch_size=64)
+        con.discount = 0.99
+        con.eval_interval = 10000
+        con.random_process_fn = lambda: OrnsteinUhlenbeckProcess(
+            size=(con.action_dim,), std=LinearSchedule(0.2))
+        con.warm_up = int(1e4)
+        con.target_network_mix = 1e-3
+    return con
+
+
+def gridsafety_con(algo,game,robust=False,noise=None,bound=2,var=0.5):
+    con = Config()
+    if torch.cuda.is_available():
+        con.DEVICE = torch.device('cuda:%d' % (0))
+    else:
+        con.DEVICE = torch.device('cpu')
+    if robust:
+        con.lexico = True
+        con.value_loss_weight = 1
+        con.noise_mode = noise
+        con.noise = make_noise(game, variance=var,mode=noise,bound=bound)
+    else:
+        con.lexico = False
+        con.noise = None
+
+    if algo == 'PPO':
+        con.num_workers = 8
+        con.clip_rewards = False
+        con.task_fn = lambda: Task(game, num_envs=con.num_workers)
+        con.eval_env = Task(game)
+        con.network_fn = lambda: CategoricalActorCriticNet(con.state_dim, con.action_dim, GridConvBody())
+        con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+        con.discount = 0.99
+        con.use_gae = True
+        con.gae_tau = 0.95
+        con.gradient_clip = 0.5
+        con.rollout_length = 128
+        con.optimization_epochs = 10
+        con.mini_batch_size = con.rollout_length * con.num_workers // 4
+        con.ppo_ratio_clip = 0.2
+        con.log_interval = 10000
+        con.max_steps = int(6e5)
+        con.shared_repr = True
+        con.target_kl = 0.01
+        con.state_normalizer = RescaleNormalizer()
+        con.reward_normalizer = RescaleNormalizer()
+        con.entropy_weight = 0.01
+        if 'Gap' in game:
+            # Specific parameters for LavaGap
+            con.max_steps = int(1e6)
+            con.discount = 0.99
+            con.rollout_length = 256
+            con.gradient_clip = 0.5#0.5
+            con.entropy_weight = 0
+            con.reward_normalizer = RescaleNormalizer()
+        if 'Cross' in game:
+            con.entropy_weight = 0#.0001
+            con.task_fn = lambda: Task(game, num_envs=con.num_workers, a2cwrapper=2)
+            con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+            con.discount = 0.99
+            con.rollout_length = int(512)
+            con.max_steps = int(1e7)
+            con.mini_batch_size = con.rollout_length * con.num_workers // 4
+            con.gradient_clip = 0.5
+        if 'Dist' in game:
+            con.reward_normalizer = RescaleNormalizer(10)
+        if 'Dyn' in game:
+            con.task_fn = lambda: Task(game, num_envs=con.num_workers, a2cwrapper=2)
+            con.discount = 0.99
+            con.rollout_length = int(256)
+            con.entropy_weight = 0
+            con.max_steps = int(6e5)
+            con.mini_batch_size = con.rollout_length * con.num_workers // 4
+            con.gradient_clip = 0.5
+        # con.decaying_lr = True
+
+    if algo == 'SAPPO':
+        con.DEVICE = torch.device('cpu')
+        con.num_workers = 8
+        con.clip_rewards = False
+        con.task_fn = lambda: Task(game, num_envs=con.num_workers)
+        con.eval_env = Task(game)
+        con.network_fn = lambda: CategoricalActorCriticNet(con.state_dim, con.action_dim, GridConvBody())
+        con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+        con.discount = 0.99
+        con.use_gae = True
+        con.gae_tau = 0.95
+        con.gradient_clip = 0.5
+        con.rollout_length = 128
+        con.optimization_epochs = 10
+        con.mini_batch_size = con.rollout_length * con.num_workers // 4
+        con.ppo_ratio_clip = 0.2
+        con.log_interval = 10000
+        con.max_steps = int(6e5)
+        con.shared_repr = True
+        con.target_kl = 0.01
+        con.kppo = 1
+        con.state_normalizer = RescaleNormalizer()
+        con.reward_normalizer = RescaleNormalizer()
+        con.entropy_weight = 0.01
+        if 'Gap' in game:
+            # Specific parameters for LavaGap
+            con.max_steps = int(1e6)
+            con.discount = 0.99
+            con.rollout_length = 256
+            con.gradient_clip = 0.5  # 0.5
+            con.entropy_weight = 0
+            con.reward_normalizer = RescaleNormalizer()
+        if 'Cross' in game:
+            con.entropy_weight = 0  # .0001
+            con.task_fn = lambda: Task(game, num_envs=con.num_workers, a2cwrapper=2)
+            con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+            con.discount = 0.99
+            con.rollout_length = int(512)
+            con.max_steps = int(1e7)
+            con.mini_batch_size = con.rollout_length * con.num_workers // 4
+            con.gradient_clip = 0.5
+        if 'Dist' in game:
+            con.reward_normalizer = RescaleNormalizer(10)
+        if 'Dyn' in game:
+            con.task_fn = lambda: Task(game, num_envs=con.num_workers, a2cwrapper=2)
+            con.discount = 0.99
+            con.rollout_length = int(256)
+            con.entropy_weight = 0
+            con.max_steps = int(6e5)
+            con.mini_batch_size = con.rollout_length * con.num_workers // 4
+            con.gradient_clip = 0.5
+
+    elif algo == 'A2C':
+        con.num_workers = 8
+        con.task_fn = lambda: Task(game, num_envs=con.num_workers)
+        con.eval_env = Task(game, num_envs=1)
+        con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+        con.network_fn = lambda: CategoricalActorCriticNet(con.state_dim, con.action_dim, GridConvBody())
+        con.state_normalizer = RescaleNormalizer()
+        con.reward_normalizer = RescaleNormalizer()  # SignNormalizer()
+        con.discount = 0.99
+        con.use_gae = True
+        con.gae_tau = 0.95
+        con.entropy_weight = 0#0.01
+        con.log_interval = 10000
+        con.eval_interval = 10000
+        con.rollout_length = 128
+        con.gradient_clip = 0.5
+        con.max_steps = int(6e5)
+        if 'Gap' in game:
+            # Specific parameters for LavaGap
+            con.max_steps = int(1e6)
+            con.discount = 0.99
+            con.rollout_length = 256
+            con.gradient_clip = 0.5
+        if 'Cross' in game:
+            con.task_fn = lambda: Task(game,single_process=False, num_envs=con.num_workers, a2cwrapper=2)
+            con.eval_env = Task(game)
+            con.discount = 0.999
+            con.rollout_length = int(512)
+            con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+            con.max_steps = int(8000000)
+            con.gradient_clip = 0.5
+            con.entropy_weight = 0#0.001
+            con.reward_normalizer = RescaleNormalizer(10)
+        if 'Dist' in game:
+            con.reward_normalizer = RescaleNormalizer(10)
+        if 'Dyn' in game:
+            con.task_fn = lambda: Task(game, single_process=False, num_envs=con.num_workers, a2cwrapper=2)
+            con.eval_env = Task(game)
+            con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+            con.discount = 0.99
+            con.rollout_length = int(256)
+            con.max_steps = int(8e5)
+            con.mini_batch_size = con.rollout_length * con.num_workers // 4
+            con.gradient_clip = 0.5
+    elif algo == 'QA2C':
+        con.num_workers = 8
+        con.task_fn = lambda: Task(game, num_envs=con.num_workers)
+        con.eval_env = Task(game)
+        con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+        con.network_fn = lambda: CategoricalQActorCriticNet(con.state_dim, con.action_dim, GridConvBody())
+        con.state_normalizer = RescaleNormalizer()
+        con.reward_normalizer = RescaleNormalizer()  # SignNormalizer()
+        con.replay_fn = lambda: UniformReplay(memory_size=int(1e5), batch_size=32)
+        con.warm_up = 1e4
+        con.discount = 0.99
+        con.use_gae = True
+        con.eval_interval = 1000000
+        con.gae_tau = 0.95
+        con.entropy_weight = 0#0.01
+        con.log_interval = 1000000
+        con.rollout_length = 128
+        con.gradient_clip = 0.5
+        con.max_steps = int(6e5)
+        if 'Gap' in game:
+            # Specific parameters for LavaGap
+            con.task_fn = lambda: Task(game, num_envs=con.num_workers, a2cwrapper=1)
+            con.max_steps = int(2e6)
+            con.discount = 0.99
+            con.rollout_length = 256
+            con.gradient_clip = 0.5
+            con.entropy_weight = 0.001
+            con.noise = make_noise(game, variance=1, mode=noise, bound=2)
+            con.reward_normalizer = RescaleNormalizer(10)
+        if 'Cross' in game:
+            con.task_fn = lambda: Task(game,single_process=False, num_envs=con.num_workers, a2cwrapper=2)
+            con.eval_env = Task(game)
+            con.discount = 0.99
+            con.rollout_length = int(512)
+            con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+            con.max_steps = int(8000000)
+            con.gradient_clip = 0.5
+            con.entropy_weight = 0#.001
+            con.reward_normalizer = RescaleNormalizer(10)
+        if 'Dist' in game:
+            con.reward_normalizer = RescaleNormalizer(10)
+        if 'Dyn' in game:
+            con.task_fn = lambda: Task(game, num_envs=con.num_workers, a2cwrapper=2)
+            con.eval_env = Task(game)
+            con.optimizer_fn = lambda params: torch.optim.Adam(params, lr=0.001, eps=1e-8)
+            con.discount = 0.99
+            con.rollout_length = int(256)
+            con.max_steps = int(1e6)
+            con.mini_batch_size = con.rollout_length * con.num_workers // 4
+            con.gradient_clip = 0.5
+    return con
+
+--------------------------------------------------------------------------------
+
+File: lrrl_experiments_QA2C.py
+import torch.cuda
+from torch.utils.tensorboard.writer import SummaryWriter
+import pickle
+from parameters_experiments import *
+from deep_rl import *
+from deep_rl.utils.noise_generator import make_noise
+
+if __name__ == '__main__':
+    mkdir('log')
+    mkdir('tf_log')
+    set_one_thread()
+    seed = np.random.randint(int(1e6))
+    random_seed(seed)
+    select_device(-1)
+    results = {}
+    iterations = 10
+
+    game_list = ['MiniGrid-LavaCrossingS9N1-v0']
+
+    for game in game_list:
+        results[game] = {'PPO_vanilla': {'noise':[],'no_noise':[],'final':{}},
+                         'PPO_LRRL_noise0': {'noise':[],'no_noise':[],'final':{}},
+                         'PPO_LRRL_noise2': {'noise':[],'no_noise':[],'final':{}},
+                         'A2C_vanilla': {'noise':[],'no_noise':[],'final':{}},
+                         'A2C_LRRL_noise0': {'noise':[],'no_noise':[],'final':{}},
+                         'A2C_LRRL_noise2': {'noise':[],'no_noise':[],'final':{}},
+                         'QA2C_vanilla': {'noise': [], 'no_noise': [], 'final': {}},
+                         'QA2C_LRRL_noise0': {'noise': [], 'no_noise': [], 'final': {}},
+                         'QA2C_LRRL_noise2': {'noise': [], 'no_noise': [], 'final': {}},
+                         'DDPG_vanilla': {'noise':[],'no_noise':[],'final':{}},
+                         'DDPG_LRRL_noise0': {'noise':[],'no_noise':[],'final':{}},
+                         'DDPG_LRRL_noise2': {'noise':[],'no_noise':[],'final':{}},
+                         'seed':seed}
+        noise_list = {'MiniGrid-LavaGapS6-v0': {'bound': 2, 'var': 0.5},
+                      'MiniGrid-Dynamic-Obstacles-6x6-v0': {'bound': 2, 'var': 0.5},
+                      'MiniGrid-LavaCrossingS9N1-v0': {'bound': 1.5, 'var': 0.5}}
+          # no noise
+        for _ in range(iterations):
+            # QA2C Agents
+            agent = make_agent(game=game,algo='QA2C',robust=True,noise=1,bound=noise_list[game]['bound'],var=noise_list[game]['var'])
+            run_steps(agent)
+            results[game]['QA2C_LRRL_noise0']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['QA2C_LRRL_noise0']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                               agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+            agent = make_agent(game=game,algo='QA2C',robust=True,noise=2,bound=noise_list[game]['bound'],var=noise_list[game]['var'])
+            run_steps(agent)
+            results[game]['QA2C_LRRL_noise2']['no_noise'].append(agent.eval_episodes()['episodic_return_test'])
+            results[game]['QA2C_LRRL_noise2']['noise'].append([agent.eval_noisy_episodes(mode=1,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                          agent.eval_noisy_episodes(mode=2,bound=noise_list[game]['bound'])['episodic_return_noise'],
+                                                               agent.eval_adv_episodes(0.5),agent.eval_adv_episodes(1),agent.eval_adv_episodes(2)])
+
+            for key in results[game].keys():
+                try:
+                    zero_noise_median = np.median(results[game][key]['no_noise'])
+                    zero_noise_std = np.std(results[game][key]['no_noise'])
+                    unif_noise_median = np.median([i[0] for i in results[game][key]['noise']])
+                    unif_noise_std = np.std([i[0] for i in results[game][key]['noise']])
+                    gaus_noise_median = np.median([i[1] for i in results[game][key]['noise']])
+                    gaus_noise_std = np.std([i[1] for i in results[game][key]['noise']])
+                    noise_median_05 = np.median([i[2] for i in results[game][key]['noise']])
+                    noise_std_05 = np.std([i[2] for i in results[game][key]['noise']])
+                    noise_median_1 = np.median([i[3] for i in results[game][key]['noise']])
+                    noise_std_1 = np.std([i[3] for i in results[game][key]['noise']])
+                    noise_median_2 = np.median([i[4] for i in results[game][key]['noise']])
+                    noise_std_2 = np.std([i[4] for i in results[game][key]['noise']])
+                    results[game][key]['final'] = {'zero_noise_median': zero_noise_median,
+                                                   'zero_noise_std': zero_noise_std,
+                                                   'unif_noise_median': unif_noise_median,
+                                                   'unif_noise_std': unif_noise_std,
+                                                   'gaus_noise_median': gaus_noise_median,
+                                                   'gaus_noise_std': gaus_noise_std,
+                                                   'adv_noise_median': [noise_median_05, noise_median_1,
+                                                                        noise_median_2],
+                                                   'adv_noise_std': [noise_std_05, noise_std_1, noise_std_2]}
+                except:
+                    None
+            with open('results_FINAL_discrete_QA2C_'+game+'.pickle','wb') as f:
+                pickle.dump(results,f)
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/__init__.py
+from deep_rl.agent import *
+from deep_rl.component import *
+from deep_rl.network import *
+from deep_rl.utils import *
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/network/__init__.py
+from .network_utils import *
+from .network_bodies import *
+from .network_heads import *
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/network/network_heads.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+import torch
+
+from .network_utils import *
+from .network_bodies import *
+
+
+class VanillaNet(nn.Module, BaseNet):
+    def __init__(self, output_dim, body):
+        super(VanillaNet, self).__init__()
+        self.fc_head = layer_init(nn.Linear(body.feature_dim, output_dim))
+        self.body = body
+        self.to(Config.DEVICE)
+
+    def forward(self, x):
+        phi = self.body(tensor(x))
+        q = self.fc_head(phi)
+        return dict(q=q)
+
+
+class DuelingNet(nn.Module, BaseNet):
+    def __init__(self, action_dim, body):
+        super(DuelingNet, self).__init__()
+        self.fc_value = layer_init(nn.Linear(body.feature_dim, 1))
+        self.fc_advantage = layer_init(nn.Linear(body.feature_dim, action_dim))
+        self.body = body
+        self.to(Config.DEVICE)
+
+    def forward(self, x, to_numpy=False):
+        phi = self.body(tensor(x))
+        value = self.fc_value(phi)
+        advantange = self.fc_advantage(phi)
+        q = value.expand_as(advantange) + (advantange - advantange.mean(1, keepdim=True).expand_as(advantange))
+        return dict(q=q)
+
+
+class CategoricalNet(nn.Module, BaseNet):
+    def __init__(self, action_dim, num_atoms, body):
+        super(CategoricalNet, self).__init__()
+        self.fc_categorical = layer_init(nn.Linear(body.feature_dim, action_dim * num_atoms))
+        self.action_dim = action_dim
+        self.num_atoms = num_atoms
+        self.body = body
+        self.to(Config.DEVICE)
+
+    def forward(self, x):
+        phi = self.body(tensor(x))
+        pre_prob = self.fc_categorical(phi).view((-1, self.action_dim, self.num_atoms))
+        prob = F.softmax(pre_prob, dim=-1)
+        log_prob = F.log_softmax(pre_prob, dim=-1)
+        return dict(prob=prob, log_prob=log_prob)
+
+
+class RainbowNet(nn.Module, BaseNet):
+    def __init__(self, action_dim, num_atoms, body, noisy_linear):
+        super(RainbowNet, self).__init__()
+        if noisy_linear:
+            self.fc_value = NoisyLinear(body.feature_dim, num_atoms)
+            self.fc_advantage = NoisyLinear(body.feature_dim, action_dim * num_atoms)
+        else:
+            self.fc_value = layer_init(nn.Linear(body.feature_dim, num_atoms))
+            self.fc_advantage = layer_init(nn.Linear(body.feature_dim, action_dim * num_atoms))
+
+        self.action_dim = action_dim
+        self.num_atoms = num_atoms
+        self.body = body
+        self.noisy_linear = noisy_linear
+        self.to(Config.DEVICE)
+
+    def reset_noise(self):
+        if self.noisy_linear:
+            self.fc_value.reset_noise()
+            self.fc_advantage.reset_noise()
+            self.body.reset_noise()
+
+    def forward(self, x):
+        phi = self.body(tensor(x))
+        value = self.fc_value(phi).view((-1, 1, self.num_atoms))
+        advantage = self.fc_advantage(phi).view(-1, self.action_dim, self.num_atoms)
+        q = value + (advantage - advantage.mean(1, keepdim=True))
+        prob = F.softmax(q, dim=-1)
+        log_prob = F.log_softmax(q, dim=-1)
+        return dict(prob=prob, log_prob=log_prob)
+
+
+class QuantileNet(nn.Module, BaseNet):
+    def __init__(self, action_dim, num_quantiles, body):
+        super(QuantileNet, self).__init__()
+        self.fc_quantiles = layer_init(nn.Linear(body.feature_dim, action_dim * num_quantiles))
+        self.action_dim = action_dim
+        self.num_quantiles = num_quantiles
+        self.body = body
+        self.to(Config.DEVICE)
+
+    def forward(self, x):
+        phi = self.body(tensor(x))
+        quantiles = self.fc_quantiles(phi)
+        quantiles = quantiles.view((-1, self.action_dim, self.num_quantiles))
+        return dict(quantile=quantiles)
+
+
+class OptionCriticNet(nn.Module, BaseNet):
+    def __init__(self, body, action_dim, num_options):
+        super(OptionCriticNet, self).__init__()
+        self.fc_q = layer_init(nn.Linear(body.feature_dim, num_options))
+        self.fc_pi = layer_init(nn.Linear(body.feature_dim, num_options * action_dim))
+        self.fc_beta = layer_init(nn.Linear(body.feature_dim, num_options))
+        self.num_options = num_options
+        self.action_dim = action_dim
+        self.body = body
+        self.to(Config.DEVICE)
+
+    def forward(self, x):
+        phi = self.body(tensor(x))
+        q = self.fc_q(phi)
+        beta = F.sigmoid(self.fc_beta(phi))
+        pi = self.fc_pi(phi)
+        pi = pi.view(-1, self.num_options, self.action_dim)
+        log_pi = F.log_softmax(pi, dim=-1)
+        pi = F.softmax(pi, dim=-1)
+        return {'q': q,
+                'beta': beta,
+                'log_pi': log_pi,
+                'pi': pi}
+
+
+class DeterministicActorCriticNet(nn.Module, BaseNet):
+    def __init__(self,
+                 state_dim,
+                 action_dim,
+                 actor_opt_fn,
+                 critic_opt_fn,
+                 phi_body=None,
+                 actor_body=None,
+                 critic_body=None):
+        super(DeterministicActorCriticNet, self).__init__()
+        if phi_body is None: phi_body = DummyBody(state_dim)
+        if actor_body is None: actor_body = DummyBody(phi_body.feature_dim)
+        if critic_body is None: critic_body = DummyBody(phi_body.feature_dim)
+        self.phi_body = phi_body
+        self.actor_body = actor_body
+        self.critic_body = critic_body
+        self.fc_action = layer_init(nn.Linear(actor_body.feature_dim, action_dim), 1e-3)
+        self.fc_critic = layer_init(nn.Linear(critic_body.feature_dim, 1), 1e-3)
+
+        self.actor_params = list(self.actor_body.parameters()) + list(self.fc_action.parameters())
+        self.critic_params = list(self.critic_body.parameters()) + list(self.fc_critic.parameters())
+        self.phi_params = list(self.phi_body.parameters())
+        
+        self.actor_opt = actor_opt_fn(self.actor_params + self.phi_params)
+        self.critic_opt = critic_opt_fn(self.critic_params + self.phi_params)
+        self.to(Config.DEVICE)
+
+    def forward(self, obs):
+        phi = self.feature(obs)
+        action = self.actor(phi)
+        return action
+
+    def feature(self, obs):
+        obs = tensor(obs)
+        return self.phi_body(obs)
+
+    def actor(self, phi):
+        return torch.tanh(self.fc_action(self.actor_body(phi)))
+
+    def critic(self, phi, a):
+        return self.fc_critic(self.critic_body(torch.cat([phi, a], dim=1)))
+
+
+class GaussianActorCriticNet(nn.Module, BaseNet):
+    def __init__(self,
+                 state_dim,
+                 action_dim,
+                 phi_body=None,
+                 actor_body=None,
+                 critic_body=None):
+        super(GaussianActorCriticNet, self).__init__()
+        if phi_body is None: phi_body = DummyBody(state_dim)
+        if actor_body is None: actor_body = DummyBody(phi_body.feature_dim)
+        if critic_body is None: critic_body = DummyBody(phi_body.feature_dim)
+        self.phi_body = phi_body
+        self.actor_body = actor_body
+        self.critic_body = critic_body
+        self.fc_action = layer_init(nn.Linear(actor_body.feature_dim, action_dim), 1e-3)
+        self.fc_critic = layer_init(nn.Linear(critic_body.feature_dim, 1), 1e-3)
+        self.std = nn.Parameter(torch.zeros(action_dim))
+        self.phi_params = list(self.phi_body.parameters())
+
+        self.actor_params = list(self.actor_body.parameters()) + list(self.fc_action.parameters()) + self.phi_params
+        self.actor_params.append(self.std)
+        self.critic_params = list(self.critic_body.parameters()) + list(self.fc_critic.parameters()) + self.phi_params
+
+        self.to(Config.DEVICE)
+
+    def forward(self, obs, action=None):
+        obs = tensor(obs)
+        phi = self.phi_body(obs)
+        phi_a = self.actor_body(phi)
+        phi_v = self.critic_body(phi)
+        mean = torch.tanh(self.fc_action(phi_a))
+        v = self.fc_critic(phi_v)
+        dist = torch.distributions.Normal(mean, F.softplus(self.std))
+        if action is None:
+            action = dist.sample()
+        log_prob = dist.log_prob(action).sum(-1).unsqueeze(-1)
+        entropy = dist.entropy().sum(-1).unsqueeze(-1)
+        return {'action': action,
+                'log_pi_a': log_prob,
+                'entropy': entropy,
+                'mean': mean,
+                'pi': action,
+                'v': v}
+
+    def actor(self,obs):
+        obs = tensor(obs)
+        phi = self.phi_body(obs)
+        phi_a = self.actor_body(phi)
+        mean = torch.tanh(self.fc_action(phi_a))
+        dist = torch.distributions.Normal(mean, F.softplus(self.std))
+        return dist.sample()
+
+
+class CategoricalActorCriticNet(nn.Module, BaseNet):
+    def __init__(self,
+                 state_dim,
+                 action_dim,
+                 phi_body=None,
+                 actor_body=None,
+                 critic_body=None):
+        super(CategoricalActorCriticNet, self).__init__()
+        if phi_body is None: phi_body = DummyBody(state_dim)
+        if actor_body is None: actor_body = DummyBody(phi_body.feature_dim)
+        if critic_body is None: critic_body = DummyBody(phi_body.feature_dim)
+        self.phi_body = phi_body
+        self.actor_body = actor_body
+        self.critic_body = critic_body
+        self.fc_action = layer_init(nn.Linear(actor_body.feature_dim, action_dim), 1e-3)
+        self.fc_critic = layer_init(nn.Linear(critic_body.feature_dim, 1), 1e-3)
+
+        self.actor_params = list(self.actor_body.parameters()) + list(self.fc_action.parameters())
+        self.critic_params = list(self.critic_body.parameters()) + list(self.fc_critic.parameters())
+        self.phi_params = list(self.phi_body.parameters())
+        
+        self.to(Config.DEVICE)
+
+    def forward(self, obs, action=None):
+        obs = tensor(obs)
+        phi = self.phi_body(obs)
+        phi_a = self.actor_body(phi)
+        phi_v = self.critic_body(phi)
+        logits = self.fc_action(phi_a)
+        v = self.fc_critic(phi_v)
+        dist = torch.distributions.Categorical(logits=logits)
+        if action is None:
+            action = dist.sample()
+        log_prob = dist.log_prob(action).unsqueeze(-1)
+        entropy = dist.entropy().unsqueeze(-1)
+        return {'action': action,
+                'log_pi_a': log_prob,
+                'entropy': entropy,
+                'v': v,
+                'pi':F.softmax(logits,dim=-1)}#dist.probs}
+
+    def actor(self,obs):
+        obs = tensor(obs)
+        phi = self.phi_body(obs)
+        phi_a = self.actor_body(phi)
+        logits = self.fc_action(phi_a)
+        return F.softmax(logits,dim=-1)
+
+
+class CategoricalQActorCriticNet(nn.Module, BaseNet):
+    def __init__(self,
+                 state_dim,
+                 action_dim,
+                 phi_body=None,
+                 actor_body=None,
+                 critic_body=None):
+        super(CategoricalQActorCriticNet, self).__init__()
+        if phi_body is None: phi_body = DummyBody(state_dim)
+        if actor_body is None: actor_body = DummyBody(phi_body.feature_dim)
+        if critic_body is None: critic_body = DummyBody(phi_body.feature_dim)
+        self.phi_body = phi_body
+        self.actor_body = actor_body
+        self.critic_body = critic_body
+        self.fc_action = layer_init(nn.Linear(actor_body.feature_dim, action_dim), 1e-3)
+        self.fc_critic = layer_init(nn.Linear(critic_body.feature_dim, action_dim), 1e-3)
+
+        self.actor_params = list(self.actor_body.parameters()) + list(self.fc_action.parameters())
+        self.critic_params = list(self.critic_body.parameters()) + list(self.fc_critic.parameters())
+        self.phi_params = list(self.phi_body.parameters())
+
+        self.to(Config.DEVICE)
+
+    def feature(self,obs):
+        return self.phi_body(obs)
+
+    def forward(self, obs, action=None):
+        obs = tensor(obs)
+        phi = self.phi_body(obs)
+        phi_a = self.actor_body(phi)
+        phi_v = self.critic_body(phi)
+        pi = F.softmax(self.fc_action(phi_a),dim=-1)
+        q = self.fc_critic(phi_v)
+        dist = torch.distributions.Categorical(probs=pi)
+        if action is None:
+            action = dist.sample()
+        log_prob = dist.log_prob(action).unsqueeze(-1)
+        entropy = dist.entropy().unsqueeze(-1)
+        return {'action': action,
+                'log_pi_a': log_prob,
+                'entropy': entropy,
+                'q': q,
+                'qa': q[torch.arange(q.size(0)),action].unsqueeze(-1),
+                'eq':torch.sum(pi*q,dim=1).unsqueeze(-1),
+                'pi': pi}  # dist.probs}
+
+    def actor_phi(self, phi):
+        phi_a = self.actor_body(phi)
+        pi = F.softmax(self.fc_action(phi_a),dim=-1)
+        dist = torch.distributions.Categorical(probs=pi)
+        action = dist.sample()
+        log_a = dist.log_prob(action).unsqueeze(-1)
+        return {'pi':pi,
+                'log': log_a}
+
+    def actor(self, x):
+        phi = self.phi_body(x)
+        phi_a = self.actor_body(phi)
+        pi = F.softmax(self.fc_action(phi_a),dim=-1)
+        # dist = torch.distributions.Categorical(probs=pi)
+        # action = dist.sample()
+        return pi
+
+    def critic(self,phi,action=None):
+        phi_v = self.critic_body(phi)
+        q = self.fc_critic(phi_v)
+        if action is not None:
+            q = q[torch.arange(q.size(0)),action].unsqueeze(-1)
+        return q
+
+    def expected_critic(self,phi,action):
+        phi_v = self.critic_body(phi)
+        q = self.fc_critic(phi_v)
+        return torch.sum(action*q,dim=1).unsqueeze(-1)
+
+
+
+
+
+
+class CategoricalDActorCriticNet(nn.Module, BaseNet):
+    def __init__(self,
+                 state_dim,
+                 action_dim,
+                 actor_opt_fn,
+                 critic_opt_fn,
+                 phi_body=None,
+                 actor_body=None,
+                 critic_body=None):
+        super(CategoricalDActorCriticNet, self).__init__()
+        if phi_body is None: phi_body = DummyBody(state_dim)
+        if actor_body is None: actor_body = DummyBody(phi_body.feature_dim)
+        if critic_body is None: critic_body = DummyBody(phi_body.feature_dim)
+        self.phi_body = phi_body
+        self.actor_body = actor_body
+        self.critic_body = critic_body
+        self.fc_action = layer_init(nn.Linear(actor_body.feature_dim, action_dim), 1e-3)
+        self.fc_critic = layer_init(nn.Linear(critic_body.feature_dim, action_dim), 1e-3)
+
+        self.actor_params = list(self.actor_body.parameters()) + list(self.fc_action.parameters())
+        self.critic_params = list(self.critic_body.parameters()) + list(self.fc_critic.parameters())
+        self.phi_params = list(self.phi_body.parameters())
+
+        self.actor_opt = actor_opt_fn(self.actor_params + self.phi_params)
+        self.critic_opt = critic_opt_fn(self.critic_params + self.phi_params)
+
+        self.to(Config.DEVICE)
+
+    def forward(self, obs, action=None):
+        obs = tensor(obs)
+        phi = self.phi_body(obs)
+        phi_a = self.actor_body(phi)
+        phi_v = self.critic_body(phi)
+        logits = self.fc_action(phi_a)
+        q = self.fc_critic(phi_v)
+        dist = torch.distributions.Categorical(logits=logits)
+        if action is None:
+            action = dist.sample()
+        log_prob = dist.log_prob(action).unsqueeze(-1)
+        entropy = dist.entropy().unsqueeze(-1)
+        return {'action': action,
+                'log_pi_a': log_prob,
+                'entropy': entropy,
+                'v': q[torch.arange(q.size(0)),action].unsqueeze(-1),
+                'pi': F.softmax(logits, dim=-1),
+                'q':q}  # dist.probs}
+
+    def actor(self,phi):
+        phi_a = self.actor_body(phi)
+        logits = self.fc_action(phi_a)
+
+
+
+    def feature(self, obs):
+        obs = tensor(obs)
+        return self.phi_body(obs)
+
+    def critic(self, phi, a=None):
+        phi_q = self.critic_body(torch.cat([phi, a], dim=1))
+        q = self.fc_critic(phi_q)
+        if a is None:
+            return q
+        else:
+            return q[torch.arange(q.size(0)),a].unsqueeze(-1)
+
+class TD3Net(nn.Module, BaseNet):
+    def __init__(self,
+                 action_dim,
+                 actor_body_fn,
+                 critic_body_fn,
+                 actor_opt_fn,
+                 critic_opt_fn,
+                 ):
+        super(TD3Net, self).__init__()
+        self.actor_body = actor_body_fn()
+        self.critic_body_1 = critic_body_fn()
+        self.critic_body_2 = critic_body_fn()
+
+        self.fc_action = layer_init(nn.Linear(self.actor_body.feature_dim, action_dim), 1e-3)
+        self.fc_critic_1 = layer_init(nn.Linear(self.critic_body_1.feature_dim, 1), 1e-3)
+        self.fc_critic_2 = layer_init(nn.Linear(self.critic_body_2.feature_dim, 1), 1e-3)
+
+        self.actor_params = list(self.actor_body.parameters()) + list(self.fc_action.parameters())
+        self.critic_params = list(self.critic_body_1.parameters()) + list(self.fc_critic_1.parameters()) +\
+                             list(self.critic_body_2.parameters()) + list(self.fc_critic_2.parameters())
+
+        self.actor_opt = actor_opt_fn(self.actor_params)
+        self.critic_opt = critic_opt_fn(self.critic_params)
+        self.to(Config.DEVICE)
+
+    def forward(self, obs):
+        obs = tensor(obs)
+        return torch.tanh(self.fc_action(self.actor_body(obs)))
+
+    def q(self, obs, a):
+        obs = tensor(obs)
+        a = tensor(a)
+        x = torch.cat([obs, a], dim=1)
+        q_1 = self.fc_critic_1(self.critic_body_1(x))
+        q_2 = self.fc_critic_2(self.critic_body_2(x))
+        return q_1, q_2
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/network/network_bodies.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+from .network_utils import *
+
+
+class NatureConvBody(nn.Module):
+    def __init__(self, in_channels=4, noisy_linear=False):
+        super(NatureConvBody, self).__init__()
+        self.feature_dim = 512
+        self.conv1 = layer_init(nn.Conv2d(in_channels, 32, kernel_size=8, stride=4))
+        self.conv2 = layer_init(nn.Conv2d(32, 64, kernel_size=4, stride=2))
+        self.conv3 = layer_init(nn.Conv2d(64, 64, kernel_size=3, stride=1))
+        if noisy_linear:
+            self.fc4 = NoisyLinear(7 * 7 * 64, self.feature_dim)
+        else:
+            self.fc4 = layer_init(nn.Linear(7 * 7 * 64, self.feature_dim))
+        self.noisy_linear = noisy_linear
+
+    def reset_noise(self):
+        if self.noisy_linear:
+            self.fc4.reset_noise()
+
+    def forward(self, x):
+        y = F.relu(self.conv1(x))
+        y = F.relu(self.conv2(y))
+        y = F.relu(self.conv3(y))
+        y = y.view(y.size(0), -1)
+        y = F.relu(self.fc4(y))
+        return y
+
+
+class GridConvBody(nn.Module):
+    def __init__(self, in_channels=3, noisy_linear=False):
+        super(GridConvBody, self).__init__()
+        self.feature_dim = 256
+        self.conv1 = layer_init(nn.Conv2d(in_channels, 16, kernel_size=2, stride=2))
+        self.conv2 = layer_init(nn.Conv2d(16, 32, kernel_size=2, stride=1))
+        self.conv3 = layer_init(nn.Conv2d(32, 64, kernel_size=2, stride=1))
+        if noisy_linear:
+            self.fc4 = NoisyLinear(64, self.feature_dim)
+        else:
+            self.fc4 = layer_init(nn.Linear(64, self.feature_dim))
+        self.noisy_linear = noisy_linear
+
+    def reset_noise(self):
+        if self.noisy_linear:
+            self.fc4.reset_noise()
+
+    def forward(self, x):
+        x = x.transpose(1,3).transpose(2,3)
+        y = F.relu(self.conv1(x))
+        y = F.relu(self.conv2(y))
+        y = F.relu(self.conv3(y))
+        y = y.view(y.size(0), -1)
+        y = F.relu(self.fc4(y))
+        return y
+
+
+class DDPGConvBody(nn.Module):
+    def __init__(self, in_channels=4):
+        super(DDPGConvBody, self).__init__()
+        self.feature_dim = 39 * 39 * 32
+        self.conv1 = layer_init(nn.Conv2d(in_channels, 32, kernel_size=3, stride=2))
+        self.conv2 = layer_init(nn.Conv2d(32, 32, kernel_size=3))
+
+    def forward(self, x):
+        y = F.elu(self.conv1(x))
+        y = F.elu(self.conv2(y))
+        y = y.view(y.size(0), -1)
+        return y
+
+
+class FCBody(nn.Module):
+    def __init__(self, state_dim, hidden_units=(64, 64), gate=F.relu, noisy_linear=False):
+        super(FCBody, self).__init__()
+        dims = (state_dim,) + hidden_units
+        if noisy_linear:
+            self.layers = nn.ModuleList(
+                [NoisyLinear(dim_in, dim_out) for dim_in, dim_out in zip(dims[:-1], dims[1:])])
+        else:
+            self.layers = nn.ModuleList(
+                [layer_init(nn.Linear(dim_in, dim_out)) for dim_in, dim_out in zip(dims[:-1], dims[1:])])
+
+        self.gate = gate
+        self.feature_dim = dims[-1]
+        self.noisy_linear = noisy_linear
+
+    def reset_noise(self):
+        if self.noisy_linear:
+            for layer in self.layers:
+                layer.reset_noise()
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = self.gate(layer(x))
+        return x
+
+
+class DummyBody(nn.Module):
+    def __init__(self, state_dim):
+        super(DummyBody, self).__init__()
+        self.feature_dim = state_dim
+
+    def forward(self, x):
+        return x
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/network/network_utils.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import math
+from ..utils import *
+
+
+class BaseNet:
+    def __init__(self):
+        pass
+
+    def reset_noise(self):
+        pass
+
+
+def layer_init(layer, w_scale=1.0):
+    nn.init.orthogonal_(layer.weight.data)
+    layer.weight.data.mul_(w_scale)
+    nn.init.constant_(layer.bias.data, 0)
+    return layer
+
+
+# Adapted from https://github.com/saj1919/RL-Adventure/blob/master/5.noisy%20dqn.ipynb
+class NoisyLinear(nn.Module):
+    def __init__(self, in_features, out_features, std_init=0.4):
+        super(NoisyLinear, self).__init__()
+
+        self.in_features = in_features
+        self.out_features = out_features
+        self.std_init = std_init
+
+        self.weight_mu = nn.Parameter(torch.zeros((out_features, in_features)), requires_grad=True)
+        self.weight_sigma = nn.Parameter(torch.zeros((out_features, in_features)), requires_grad=True)
+        self.register_buffer('weight_epsilon', torch.zeros((out_features, in_features)))
+
+        self.bias_mu = nn.Parameter(torch.zeros(out_features), requires_grad=True)
+        self.bias_sigma = nn.Parameter(torch.zeros(out_features), requires_grad=True)
+        self.register_buffer('bias_epsilon', torch.zeros(out_features))
+
+        self.register_buffer('noise_in', torch.zeros(in_features))
+        self.register_buffer('noise_out_weight', torch.zeros(out_features))
+        self.register_buffer('noise_out_bias', torch.zeros(out_features))
+
+        self.reset_parameters()
+        self.reset_noise()
+
+    def forward(self, x):
+        if self.training:
+            weight = self.weight_mu + self.weight_sigma.mul(self.weight_epsilon)
+            bias = self.bias_mu + self.bias_sigma.mul(self.bias_epsilon)
+        else:
+            weight = self.weight_mu
+            bias = self.bias_mu
+
+        return F.linear(x, weight, bias)
+
+    def reset_parameters(self):
+        mu_range = 1 / math.sqrt(self.weight_mu.size(1))
+
+        self.weight_mu.data.uniform_(-mu_range, mu_range)
+        self.weight_sigma.data.fill_(self.std_init / math.sqrt(self.weight_sigma.size(1)))
+
+        self.bias_mu.data.uniform_(-mu_range, mu_range)
+        self.bias_sigma.data.fill_(self.std_init / math.sqrt(self.bias_sigma.size(0)))
+
+    def reset_noise(self):
+        self.noise_in.normal_(std=Config.NOISY_LAYER_STD)
+        self.noise_out_weight.normal_(std=Config.NOISY_LAYER_STD)
+        self.noise_out_bias.normal_(std=Config.NOISY_LAYER_STD)
+
+        self.weight_epsilon.copy_(self.transform_noise(self.noise_out_weight).ger(
+            self.transform_noise(self.noise_in)))
+        self.bias_epsilon.copy_(self.transform_noise(self.noise_out_bias))
+
+    def transform_noise(self, x):
+        return x.sign().mul(x.abs().sqrt())
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/component/random_process.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+import numpy as np
+
+
+class RandomProcess(object):
+    def reset_states(self):
+        pass
+
+
+class GaussianProcess(RandomProcess):
+    def __init__(self, size, std):
+        self.size = size
+        self.std = std
+
+    def sample(self):
+        return np.random.randn(*self.size) * self.std()
+
+
+class OrnsteinUhlenbeckProcess(RandomProcess):
+    def __init__(self, size, std, theta=.15, dt=1e-2, x0=None):
+        self.theta = theta
+        self.mu = 0
+        self.std = std
+        self.dt = dt
+        self.x0 = x0
+        self.size = size
+        self.reset_states()
+
+    def sample(self):
+        x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + self.std() * np.sqrt(
+            self.dt) * np.random.randn(*self.size)
+        self.x_prev = x
+        return x
+
+    def reset_states(self):
+        self.x_prev = self.x0 if self.x0 is not None else np.zeros(self.size)
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/component/envs.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+import os
+import gym
+import gym_minigrid
+import numpy as np
+import torch
+from gym.spaces.box import Box
+from gym.spaces.discrete import Discrete
+
+from stable_baselines.common.atari_wrappers import (
+    make_atari,
+    wrap_deepmind,
+    ClipRewardEnv,
+)
+from stable_baselines.common.atari_wrappers import FrameStack as FrameStack_
+from stable_baselines.common.vec_env.subproc_vec_env import SubprocVecEnv, VecEnv
+
+from ..utils import *
+
+gridnav = [
+    "FFSFFFFFFF",
+    "HFHFFFFFFF",
+    "FFHHFFFFFF",
+    "FHFFFHFFFF",
+    "FHFHFFFFFF",
+    "FHHFFFHFFF",
+    "FFHFHFHFFF",
+    "HFFFHFHFFF",
+    "HHFFHFFFFF",
+    "FHGFFFFFFF",
+]
+try:
+    import roboschool
+except ImportError:
+    pass
+
+
+# adapted from https://github.com/ikostrikov/pytorch-a2c-ppo-acktr/blob/master/envs.py
+def make_env(
+    env_id,
+    seed,
+    rank,
+    episode_life=True,
+    clip_rewards=False,
+    a2cwrapper=0,
+    wrapper=None,
+):
+    def _thunk():
+        random_seed(seed)
+        if env_id.startswith("dm"):
+            import dm_control2gym
+
+            _, domain, task = env_id.split("-")
+            env = dm_control2gym.make(domain_name=domain, task_name=task)
+        elif "zen" in env_id:
+            env = gym.make("FrozenLake-v0", desc=gridnav)
+        else:
+            env = gym.make(env_id)
+        is_minigrid = "MiniGrid" in env_id
+        is_atari = hasattr(gym.envs, "atari") and isinstance(
+            env.unwrapped, gym.envs.atari.atari_env.AtariEnv
+        )
+        if is_atari:
+            env = make_atari(env_id)
+        env.seed(seed + rank)
+        env = OriginalReturnWrapper(env)
+        if is_atari:
+            env = wrap_deepmind(
+                env,
+                episode_life=episode_life,
+                clip_rewards=False,
+                frame_stack=False,
+                scale=False,
+            )
+            obs_shape = env.observation_space.shape
+            if len(obs_shape) == 3:
+                env = TransposeImage(env)
+            env = FrameStack(env, 4)
+        else:
+            if clip_rewards > 0:
+                env = ClipRewardEnv(env)
+            if is_minigrid:
+                # env = gym_minigrid.wrappers.RGBImgObsWrapper(env)
+                if "Cross" in env_id or "Dynam" in env_id:
+                    if a2cwrapper == 1:
+                        None  # env = LavaNegRewWrapper2(env)
+                    elif a2cwrapper == 2:
+                        env = LavaNegRewWrapper2(env)
+                    else:
+                        env = LavaNegRewWrapper(env)
+
+                env = gym_minigrid.wrappers.ImgObsWrapper(env)
+            elif wrapper == "mujoco":
+                env = MujocoWrapper(env)
+        return env
+
+    return _thunk
+
+
+class OriginalReturnWrapper(gym.Wrapper):
+    def __init__(self, env):
+        gym.Wrapper.__init__(self, env)
+        self.total_rewards = 0
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        self.total_rewards += reward
+        if done:
+            info["episodic_return"] = self.total_rewards
+            self.total_rewards = 0
+        else:
+            info["episodic_return"] = None
+        return obs, reward, done, info
+
+    def reset(self):
+        return self.env.reset()
+
+
+class MujocoWrapper(gym.Wrapper):
+    def __init__(self, env):
+        gym.Wrapper.__init__(self, env)
+        self.total_rewards = 0
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        return np.clip(obs, -10, 10), np.clip(reward, -10, 10), done, info
+
+    def reset(self):
+        return self.env.reset()
+
+
+class LavaNegRewWrapper(gym.Wrapper):
+    def __init__(self, env):
+        gym.Wrapper.__init__(self, env)
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        if done and reward == 0:
+            reward = -1
+        elif not reward:
+            reward = -0.05
+        elif reward > 0:
+            reward = 5
+        return obs, reward, done, info
+
+
+class LavaNegRewWrapper2(gym.Wrapper):
+    def __init__(self, env):
+        gym.Wrapper.__init__(self, env)
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        # if done and reward == 0:
+        #     reward = -1
+        # if not reward:
+        #     reward = -0.01
+        if reward > 0:
+            reward = 1
+        else:
+            reward = 0
+        return obs, reward, done, info
+
+    def reset(self):
+        return self.env.reset()
+
+
+class ObsGridWrapper(gym.ObservationWrapper):  # TODO
+    """
+    Use the image as the only observation output, no language/mission.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space = env.observation_space.spaces["image"]
+
+    def observation(self, obs):
+        return obs["image"].transpose()
+
+
+class TransposeImage(gym.ObservationWrapper):
+    def __init__(self, env=None):
+        super(TransposeImage, self).__init__(env)
+        obs_shape = self.observation_space.shape
+        self.observation_space = Box(
+            self.observation_space.low[0, 0, 0],
+            self.observation_space.high[0, 0, 0],
+            [obs_shape[2], obs_shape[1], obs_shape[0]],
+            dtype=self.observation_space.dtype,
+        )
+
+    def observation(self, observation):
+        return observation.transpose(2, 0, 1)
+
+
+# The original LayzeFrames doesn't work well
+class LazyFrames(object):
+    def __init__(self, frames):
+        """This object ensures that common frames between the observations are only stored once.
+        It exists purely to optimize memory usage which can be huge for DQN's 1M frames replay
+        buffers.
+
+        This object should only be converted to numpy array before being passed to the model.
+
+        You'd not believe how complex the previous solution was."""
+        self._frames = frames
+
+    def __array__(self, dtype=None):
+        out = np.concatenate(self._frames, axis=0)
+        if dtype is not None:
+            out = out.astype(dtype)
+        return out
+
+    def __len__(self):
+        return len(self.__array__())
+
+    def __getitem__(self, i):
+        return self.__array__()[i]
+
+
+class FrameStack(FrameStack_):
+    def __init__(self, env, k):
+        FrameStack_.__init__(self, env, k)
+
+    def _get_ob(self):
+        assert len(self.frames) == self.k
+        return LazyFrames(list(self.frames))
+
+
+# The original one in baselines is really bad
+class DummyVecEnv(VecEnv):
+    def __init__(self, env_fns):
+        self.envs = [fn() for fn in env_fns]
+        env = self.envs[0]
+        VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
+        self.actions = None
+
+    def step_async(self, actions):
+        self.actions = actions
+
+    def step_wait(self):
+        data = []
+        for i in range(self.num_envs):
+            obs, rew, done, info = self.envs[i].step(self.actions[i])
+            if done:
+                obs = self.envs[i].reset()
+            data.append([obs, rew, done, info])
+        obs, rew, done, info = zip(*data)
+        return obs, np.asarray(rew), np.asarray(done), info
+
+    def reset(self):
+        return [env.reset() for env in self.envs]
+
+    def close(self):
+        return
+
+
+class Task:
+    def __init__(
+        self,
+        name,
+        num_envs=1,
+        single_process=True,
+        log_dir=None,
+        episode_life=True,
+        seed=None,
+        clip_rewards=False,
+        wrapper=None,
+        a2cwrapper=0,
+    ):
+        if seed is None:
+            seed = np.random.randint(int(1e9))
+        if log_dir is not None:
+            mkdir(log_dir)
+        envs = [
+            make_env(
+                name,
+                seed,
+                i,
+                episode_life,
+                clip_rewards=clip_rewards,
+                a2cwrapper=a2cwrapper,
+                wrapper=wrapper,
+            )
+            for i in range(num_envs)
+        ]
+        if single_process:
+            Wrapper = DummyVecEnv
+        else:
+            Wrapper = SubprocVecEnv
+        self.env = Wrapper(envs)
+        self.name = name
+        self.observation_space = self.env.observation_space
+        self.state_dim = int(np.prod(self.env.observation_space.shape))
+
+        self.action_space = self.env.action_space
+        if isinstance(self.action_space, Discrete):
+            self.action_dim = self.action_space.n
+        elif isinstance(self.action_space, Box):
+            self.action_dim = self.action_space.shape[0]
+        else:
+            assert "unknown action space"
+
+    def reset(self):
+        return self.env.reset()
+
+    def step(self, actions):
+        if isinstance(self.action_space, Box):
+            actions = np.clip(actions, self.action_space.low, self.action_space.high)
+        return self.env.step(actions)
+
+
+if __name__ == "__main__":
+    task = Task("Hopper-v2", 5, single_process=False)
+    state = task.reset()
+    while True:
+        action = np.random.rand(task.observation_space.shape[0])
+        next_state, reward, done, _ = task.step(action)
+        print(done)
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/component/__init__.py
+from .replay import *
+from .random_process import *
+from .envs import Task
+from .envs import LazyFrames
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/component/replay.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+import torch
+import numpy as np
+import torch.multiprocessing as mp
+from collections import deque
+from ..utils import *
+import random
+from collections import namedtuple
+
+Transition = namedtuple('Transition', ['state', 'action', 'reward', 'next_state', 'mask'])#, 'pi'])
+PrioritizedTransition = namedtuple('Transition',
+                                   ['state', 'action', 'reward', 'next_state', 'mask', 'sampling_prob', 'idx'])
+
+
+class Storage:
+    def __init__(self, memory_size, keys=None):
+        if keys is None:
+            keys = []
+        keys = keys + ['state', 'action', 'reward', 'mask',
+                       'v', 'q', 'pi', 'log_pi', 'entropy',
+                       'advantage', 'ret', 'q_a', 'log_pi_a',
+                       'mean', 'next_state']
+        self.keys = keys
+        self.memory_size = memory_size
+        self.reset()
+
+    def feed(self, data):
+        for k, v in data.items():
+            if k not in self.keys:
+                raise RuntimeError('Undefined key')
+            getattr(self, k).append(v)
+
+    def placeholder(self):
+        for k in self.keys:
+            v = getattr(self, k)
+            if len(v) == 0:
+                setattr(self, k, [None] * self.memory_size)
+
+    def reset(self):
+        for key in self.keys:
+            setattr(self, key, [])
+        self.pos = 0
+        self._size = 0
+
+    def extract(self, keys):
+        data = [getattr(self, k)[:self.memory_size] for k in keys]
+        data = map(lambda x: torch.cat(x, dim=0), data)
+        Entry = namedtuple('Entry', keys)
+        return Entry(*list(data))
+
+
+class UniformReplay(Storage):
+    TransitionCLS = Transition
+
+    def __init__(self, memory_size, batch_size, n_step=1, discount=1, history_length=1, keys=None):
+        super(UniformReplay, self).__init__(memory_size, keys)
+        self.batch_size = batch_size
+        self.n_step = n_step
+        self.discount = discount
+        self.history_length = history_length
+        self.pos = 0
+        self._size = 0
+
+    def compute_valid_indices(self):
+        indices = []
+        indices.extend(list(range(self.history_length - 1, self.pos - self.n_step)))
+        indices.extend(list(range(self.pos + self.history_length - 1, self.size() - self.n_step)))
+        return np.asarray(indices)
+
+    def feed(self, data):
+        for k, vs in data.items():
+            if k not in self.keys:
+                raise RuntimeError('Undefined key')
+            storage = getattr(self, k)
+            pos = self.pos
+            size = self.size()
+            for v in vs:
+                if pos >= len(storage):
+                    storage.append(v)
+                    size += 1
+                else:
+                    storage[self.pos] = v
+                pos = (pos + 1) % self.memory_size
+        self.pos = pos
+        self._size = size
+
+    def sample(self, batch_size=None):
+        if batch_size is None:
+            batch_size = self.batch_size
+
+        sampled_data = []
+        while len(sampled_data) < batch_size:
+            transition = self.construct_transition(np.random.randint(0, self.size()))
+            if transition is not None:
+                sampled_data.append(transition)
+        sampled_data = zip(*sampled_data)
+        sampled_data = list(map(lambda x: np.asarray(x), sampled_data))
+        return Transition(*sampled_data)
+
+    def valid_index(self, index):
+        if index - self.history_length + 1 >= 0 and index + self.n_step < self.pos:
+            return True
+        if index - self.history_length + 1 >= self.pos and index + self.n_step < self.size():
+            return True
+        return False
+
+    def construct_transition(self, index):
+        if not self.valid_index(index):
+            return None
+        s_start = index - self.history_length + 1
+        s_end = index
+        if s_start < 0:
+            raise RuntimeError('Invalid index')
+        next_s_start = s_start + self.n_step
+        next_s_end = s_end + self.n_step
+        if s_end < self.pos and next_s_end >= self.pos:
+            raise RuntimeError('Invalid index')
+
+        state = [self.state[i] for i in range(s_start, s_end + 1)]
+        next_state = [self.state[i] for i in range(next_s_start, next_s_end + 1)]
+        action = self.action[s_end]
+        reward = [self.reward[i] for i in range(s_end, s_end + self.n_step)]
+        mask = [self.mask[i] for i in range(s_end, s_end + self.n_step)]
+#        pi = self.pi[s_end]
+        if self.history_length == 1:
+            # eliminate the extra dimension if no frame stack
+            state = state[0]
+            next_state = next_state[0]
+        state = np.array(state)
+        next_state = np.array(next_state)
+        cum_r = 0
+        cum_mask = 1
+        for i in reversed(np.arange(self.n_step)):
+            cum_r = reward[i] + mask[i] * self.discount * cum_r
+            cum_mask = cum_mask and mask[i]
+        return Transition(state=state, action=action, reward=cum_r, next_state=next_state, mask=cum_mask)#, pi=pi)
+
+    def size(self):
+        return self._size
+
+    def full(self):
+        return self._size == self.memory_size
+
+    def update_priorities(self, info):
+        raise NotImplementedError
+
+
+class PrioritizedReplay(UniformReplay):
+    TransitionCLS = PrioritizedTransition
+
+    def __init__(self, memory_size, batch_size, n_step=1, discount=1, history_length=1, keys=None):
+        super(PrioritizedReplay, self).__init__(memory_size, batch_size, n_step, discount, history_length, keys)
+        self.tree = SumTree(memory_size)
+        self.max_priority = 1
+
+    def feed(self, data):
+        super().feed(data)
+        self.tree.add(self.max_priority, None)
+
+    def sample(self, batch_size=None):
+        if batch_size is None:
+            batch_size = self.batch_size
+
+        segment = self.tree.total() / batch_size
+
+        sampled_data = []
+        for i in range(batch_size):
+            a = segment * i
+            b = segment * (i + 1)
+            s = random.uniform(a, b)
+            (idx, p, data_index) = self.tree.get(s)
+            transition = super().construct_transition(data_index)
+            if transition is None:
+                continue
+            sampled_data.append(PrioritizedTransition(
+                *transition,
+                sampling_prob=p / self.tree.total(),
+                idx=idx,
+            ))
+        while len(sampled_data) < batch_size:
+            # This should rarely happen
+            sampled_data.append(random.choice(sampled_data))
+
+        sampled_data = zip(*sampled_data)
+        sampled_data = list(map(lambda x: np.asarray(x), sampled_data))
+        sampled_data = PrioritizedTransition(*sampled_data)
+        return sampled_data
+
+    def update_priorities(self, info):
+        for idx, priority in info:
+            self.max_priority = max(self.max_priority, priority)
+            self.tree.update(idx, priority)
+
+
+class ReplayWrapper(mp.Process):
+    FEED = 0
+    SAMPLE = 1
+    EXIT = 2
+    UPDATE_PRIORITIES = 3
+
+    def __init__(self, replay_cls, replay_kwargs, asynch=True):
+        mp.Process.__init__(self)
+        self.replay_kwargs = replay_kwargs
+        self.replay_cls = replay_cls
+        self.cache_len = 2
+        if asynch:
+            self.pipe, self.worker_pipe = mp.Pipe()
+            self.start()
+        else:
+            self.replay = replay_cls(**replay_kwargs)
+            self.sample = self.replay.sample
+            self.feed = self.replay.feed
+            self.update_priorities = self.replay.update_priorities
+
+    def run(self):
+        replay = self.replay_cls(**self.replay_kwargs)
+
+        cache = []
+
+        cache_initialized = False
+        cur_cache = 0
+
+        def set_up_cache():
+            batch_data = replay.sample()
+            batch_data = [tensor(x) for x in batch_data]
+            for i in range(self.cache_len):
+                cache.append([x.clone() for x in batch_data])
+                for x in cache[i]: x.share_memory_()
+            sample(0)
+            sample(1)
+
+        def sample(cur_cache):
+            batch_data = replay.sample()
+            batch_data = [tensor(x) for x in batch_data]
+            for cache_x, x in zip(cache[cur_cache], batch_data):
+                cache_x.copy_(x)
+
+        while True:
+            op, data = self.worker_pipe.recv()
+            if op == self.FEED:
+                replay.feed(data)
+            elif op == self.SAMPLE:
+                if cache_initialized:
+                    self.worker_pipe.send([cur_cache, None])
+                else:
+                    set_up_cache()
+                    cache_initialized = True
+                    self.worker_pipe.send([cur_cache, cache])
+                cur_cache = (cur_cache + 1) % 2
+                sample(cur_cache)
+            elif op == self.UPDATE_PRIORITIES:
+                replay.update_priorities(data)
+            elif op == self.EXIT:
+                self.worker_pipe.close()
+                return
+            else:
+                raise Exception('Unknown command')
+
+    def feed(self, exp):
+        self.pipe.send([self.FEED, exp])
+
+    def sample(self):
+        self.pipe.send([self.SAMPLE, None])
+        cache_id, data = self.pipe.recv()
+        if data is not None:
+            self.cache = data
+        return self.replay_cls.TransitionCLS(*self.cache[cache_id])
+
+    def update_priorities(self, info):
+        self.pipe.send([self.UPDATE_PRIORITIES, info])
+
+    def close(self):
+        self.pipe.send([self.EXIT, None])
+        self.pipe.close()
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/misc.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+import numpy as np
+import pickle
+import os
+import datetime
+import torch
+import time
+from .torch_utils import *
+from pathlib import Path
+import itertools
+from collections import OrderedDict, Sequence
+
+
+def run_steps(agent,seed=None):
+    config = agent.config
+    if seed is not None:
+        agent_name = agent.__class__.__name__ + '_'+str(seed)+ '_'
+    else:
+        agent_name = agent.__class__.__name__
+    t0 = time.time()
+    while True:
+        # if config.save_interval and not agent.total_steps % config.save_interval:
+        #     agent.save('data/%s-%s-%d' % (agent_name, config.tag, agent.total_steps))
+        # if config.log_interval and not agent.total_steps % config.log_interval:
+        #     agent.logger.info('steps %d, %.2f steps/s' % (agent.total_steps, config.log_interval / (time.time() - t0)))
+        #     t0 = time.time()
+        # if config.eval_interval and not agent.total_steps % config.eval_interval:
+        #     agent.eval_episodes()
+            # if config.lexico and len(agent.recent_losses[0])>1:
+            #     agent.log_progress()
+        if config.max_steps and agent.total_steps >= config.max_steps:
+            agent.close()
+            break
+        agent.step()
+        agent.switch_task()
+    agent.save('data/%s-%s-%d' % (agent_name, config.tag, agent.total_steps))
+
+def run_steps_policy_evolution(agent):
+    config = agent.config
+    agent_name = agent.__class__.__name__
+    saved = 1
+    agent.save_network()
+    while True:
+        if config.max_steps and agent.total_steps >= config.max_steps:
+            agent.close()
+            break
+        agent.step()
+        if agent.total_steps > saved*config.eval_interval:
+            agent.save_network()
+            saved +=1
+        agent.switch_task()
+    #agent.save('data/%s-%s-%d' % (agent_name, config.tag, agent.total_steps))
+
+def get_time_str():
+    return datetime.datetime.now().strftime("%y%m%d-%H%M%S")
+
+
+def get_default_log_dir(name):
+    return './log/%s-%s' % (name, get_time_str())
+
+
+def mkdir(path):
+    Path(path).mkdir(parents=True, exist_ok=True)
+
+
+def close_obj(obj):
+    if hasattr(obj, 'close'):
+        obj.close()
+
+
+def random_sample(indices, batch_size):
+    indices = np.asarray(np.random.permutation(indices))
+    batches = indices[:len(indices) // batch_size * batch_size].reshape(-1, batch_size)
+    for batch in batches:
+        yield batch
+    r = len(indices) % batch_size
+    if r:
+        yield indices[-r:]
+
+
+def is_plain_type(x):
+    for t in [str, int, float, bool]:
+        if isinstance(x, t):
+            return True
+    return False
+
+
+def generate_tag(params):
+    if 'tag' in params.keys():
+        return
+    game = params['game']
+    params.setdefault('run', 0)
+    run = params['run']
+    del params['game']
+    del params['run']
+    robustness = '_vanilla'
+    if 'config_attributes' in params.keys():
+        if params['config_attributes'].lexico == True:
+            robustness = '_robust_'+str(params['config_attributes'].noise.mode)
+    nam = ['%s_%s' % (k, v if is_plain_type(v) else v.__name__) for k, v in sorted(params.items()) if not isinstance(v,Config)]
+    tag = '%s-%s-run-%d-%s' % (game, '-'.join(nam), run,robustness)
+    params['tag'] = tag
+    params['game'] = game
+    params['run'] = run
+
+
+def translate(pattern):
+    groups = pattern.split('.')
+    pattern = ('\.').join(groups)
+    return pattern
+
+
+def split(a, n):
+    k, m = divmod(len(a), n)
+    return (a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
+
+
+class HyperParameter:
+    def __init__(self, id, param):
+        self.id = id
+        self.param = dict()
+        for key, item in param:
+            self.param[key] = item
+
+    def __str__(self):
+        return str(self.id)
+
+    def dict(self):
+        return self.param
+
+
+class HyperParameters(Sequence):
+    def __init__(self, ordered_params):
+        if not isinstance(ordered_params, OrderedDict):
+            raise NotImplementedError
+        params = []
+        for key in ordered_params.keys():
+            param = [[key, iterm] for iterm in ordered_params[key]]
+            params.append(param)
+        self.params = list(itertools.product(*params))
+
+    def __getitem__(self, index):
+        return HyperParameter(index, self.params[index])
+
+    def __len__(self):
+        return len(self.params)
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/plot.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+import numpy as np
+import os
+import re
+
+
+class Plotter:
+    COLORS = ['blue', 'green', 'red', 'black', 'cyan', 'magenta', 'yellow', 'brown', 'purple', 'pink',
+              'orange', 'teal', 'coral', 'lightblue', 'lime', 'lavender', 'turquoise',
+              'darkgreen', 'tan', 'salmon', 'gold', 'lightpurple', 'darkred', 'darkblue']
+
+    RETURN_TRAIN = 'episodic_return_train'
+    RETURN_TEST = 'episodic_return_test'
+
+    def __init__(self):
+        pass
+
+    def _rolling_window(self, a, window):
+        shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
+        strides = a.strides + (a.strides[-1],)
+        return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+
+    def _window_func(self, x, y, window, func):
+        yw = self._rolling_window(y, window)
+        yw_func = func(yw, axis=-1)
+        return x[window - 1:], yw_func
+
+    def load_results(self, dirs, **kwargs):
+        kwargs.setdefault('tag', self.RETURN_TRAIN)
+        kwargs.setdefault('right_align', False)
+        kwargs.setdefault('window', 0)
+        kwargs.setdefault('top_k', 0)
+        kwargs.setdefault('top_k_measure', None)
+        kwargs.setdefault('interpolation', 100)
+        xy_list = self.load_log_dirs(dirs, **kwargs)
+
+        if kwargs['top_k']:
+            perf = [kwargs['top_k_measure'](y) for _, y in xy_list]
+            top_k_runs = np.argsort(perf)[-kwargs['top_k']:]
+            new_xy_list = []
+            for r, (x, y) in enumerate(xy_list):
+                if r in top_k_runs:
+                    new_xy_list.append((x, y))
+            xy_list = new_xy_list
+
+        if kwargs['interpolation']:
+            x_right = float('inf')
+            for x, y in xy_list:
+                x_right = min(x_right, x[-1])
+            x = np.arange(0, x_right, kwargs['interpolation'])
+            y = []
+            for x_, y_ in xy_list:
+                y.append(np.interp(x, x_, y_))
+            y = np.asarray(y)
+        else:
+            x = xy_list[0][0]
+            y = [y for _, y in xy_list]
+            x = np.asarray(x)
+            y = np.asarray(y)
+
+        return x, y
+
+    def filter_log_dirs(self, pattern, negative_pattern=' ', root='./log', **kwargs):
+        dirs = [item[0] for item in os.walk(root)]
+        leaf_dirs = []
+        for i in range(len(dirs)):
+            if i + 1 < len(dirs) and dirs[i + 1].startswith(dirs[i]):
+                continue
+            leaf_dirs.append(dirs[i])
+        names = []
+        p = re.compile(pattern)
+        np = re.compile(negative_pattern)
+        for dir in leaf_dirs:
+            if p.match(dir) and not np.match(dir):
+                names.append(dir)
+                print(dir)
+        print('')
+        return sorted(names)
+
+    def load_log_dirs(self, dirs, **kwargs):
+        kwargs.setdefault('right_align', False)
+        kwargs.setdefault('window', 0)
+        kwargs.setdefault('right_most', 0)
+        xy_list = []
+        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+        for dir in dirs:
+            event_acc = EventAccumulator(dir)
+            event_acc.Reload()
+            _, x, y = zip(*event_acc.Scalars(kwargs['tag']))
+            xy_list.append([x, y])
+        if kwargs['right_align']:
+            x_max = float('inf')
+            for x, y in xy_list:
+                x_max = min(x_max, len(y))
+            xy_list = [[x[:x_max], y[:x_max]] for x, y in xy_list]
+        x_max = kwargs['right_most']
+        if x_max:
+            xy_list = [[x[:x_max], y[:x_max]] for x, y in xy_list]
+        if kwargs['window']:
+            xy_list = [self._window_func(np.asarray(x), np.asarray(y), kwargs['window'], np.mean) for x, y in xy_list]
+        return xy_list
+
+    def plot_mean(self, data, x=None, **kwargs):
+        import matplotlib.pyplot as plt
+        if x is None:
+            x = np.arange(data.shape[1])
+        if kwargs['error'] == 'se':
+            e_x = np.std(data, axis=0) / np.sqrt(data.shape[0])
+        elif kwargs['error'] == 'std':
+            e_x = np.std(data, axis=0)
+        else:
+            raise NotImplementedError
+        m_x = np.mean(data, axis=0)
+        del kwargs['error']
+        plt.plot(x, m_x, **kwargs)
+        del kwargs['label']
+        plt.fill_between(x, m_x + e_x, m_x - e_x, alpha=0.3, **kwargs)
+
+    def plot_median_std(self, data, x=None, **kwargs):
+        import matplotlib.pyplot as plt
+        if x is None:
+            x = np.arange(data.shape[1])
+        e_x = np.std(data, axis=0)
+        m_x = np.median(data, axis=0)
+        plt.plot(x, m_x, **kwargs)
+        del kwargs['label']
+        plt.fill_between(x, m_x + e_x, m_x - e_x, alpha=0.3, **kwargs)
+
+    def plot_games(self, games, **kwargs):
+        kwargs.setdefault('agg', 'mean')
+        import matplotlib.pyplot as plt
+        l = len(games)
+        plt.figure(figsize=(l * 5, 5))
+        for i, game in enumerate(games):
+            plt.subplot(1, l, i + 1)
+            for j, p in enumerate(kwargs['patterns']):
+                label = kwargs['labels'][j]
+                color = self.COLORS[j]
+                log_dirs = self.filter_log_dirs(pattern='.*%s.*%s' % (game, p), **kwargs)
+                x, y = self.load_results(log_dirs, **kwargs)
+                if kwargs['downsample']:
+                    indices = np.linspace(0, len(x) - 1, kwargs['downsample']).astype(np.int)
+                    x = x[indices]
+                    y = y[:, indices]
+                if kwargs['agg'] == 'mean':
+                    self.plot_mean(y, x, label=label, color=color, error='se')
+                elif kwargs['agg'] == 'mean_std':
+                    self.plot_mean(y, x, label=label, color=color, error='std')
+                elif kwargs['agg'] == 'median':
+                    self.plot_median_std(y, x, label=label, color=color)
+                else:
+                    for k in range(y.shape[0]):
+                        plt.plot(x, y[i], label=label, color=color)
+                        label = None
+            plt.xlabel('steps')
+            if not i:
+                plt.ylabel(kwargs['tag'])
+            plt.title(game)
+            plt.legend()
+
+    def select_best_parameters(self, patterns, **kwargs):
+        scores = []
+        for pattern in patterns:
+            log_dirs = self.filter_log_dirs(pattern, **kwargs)
+            xy_list = self.load_log_dirs(log_dirs, **kwargs)
+            y = np.asarray([xy[1] for xy in xy_list])
+            scores.append(kwargs['score'](y))
+        indices = np.argsort(-np.asarray(scores))
+        return indices
+
+
+    def reduce_dir(self, root, tag, ids, score_fn):
+        tf_log_info = {}
+        for dir, _, files in os.walk(root):
+            for file in files:
+                if 'tfevents' in file:
+                    dir = os.path.basename(dir)
+                    dir = re.sub(r'hp_\d+', 'placeholder', dir)
+                    dir = re.sub(r'run.*', 'run', dir)
+                    tf_log_info[dir] = {}
+        for key in tf_log_info.keys():
+            scores = []
+            for id in ids:
+                dir = key.replace('placeholder', 'hp_%s' % (id))
+                names = self.filter_log_dirs('.*%s.*' % (dir), root=root)
+                xy_list = self.load_log_dirs(names, tag=tag, right_align=True)
+                scores.append(score_fn(np.asarray([y for x, y in xy_list])))
+            best = np.nanargmax(scores)
+            tf_log_info[key]['hp'] = ids[best]
+            tf_log_info[key]['score'] = scores[best]
+        return tf_log_info
+
+
+    def reduce_patterns(self, patterns, root, tag, ids, score_fn):
+        new_patterns = []
+        best_ids = []
+        for pattern in patterns:
+            scores = []
+            pattern = re.sub(r'hp_\d+', 'placeholder', pattern)
+            ps = []
+            for id in ids:
+                p = pattern.replace('placeholder', 'hp_%s' % (id))
+                ps.append(p)
+                names = self.filter_log_dirs('.*%s.*' % (p), root=root)
+                xy_list = self.load_log_dirs(names, tag=tag, right_align=True)
+                scores.append(score_fn(np.asarray([y for x, y in xy_list])))
+            try:
+                best = np.nanargmax(scores)
+            except ValueError as e:
+                print(e)
+                best = 0
+            best_ids.append(best)
+            new_patterns.append(ps[best])
+        return dict(patterns=new_patterns, ids=best_ids)
+
+    def plot_policy_trajectories(self,fn):
+        import pickle
+        import sklearn
+        import matplotlib.pyplot as plt
+        with open('Policy_trajectories_A2C_MiniGrid-Dynamic-Obstacles-6x6-v0.pickle', 'rb') as f:
+            data = pickle.load(f)
+        # Average parameter space
+        avg_data = {}
+        for game in data.keys():
+            avg_data[game] = {}
+            for algo in data[game].keys():
+                avg_data[game][algo] = []
+                params_time_series = []
+                for resi in data[game][algo]['parameters']:
+                    params_time_series.append([np.concatenate((np.asarray(p['fc_action_weight'].cpu()).flatten(),
+                                                          np.asarray(p['fc_action_bias'].cpu()).flatten()))
+                                          for p in resi])
+                num_sims = len(params_time_series[0])
+                avg_data[game][algo] = {'results': [sum([i[j] for i in params_time_series])/num_sims for j in range(num_sims)],
+                                        'embedding': []}
+                avg_data[game][algo]['embedding'] = [sklearn.manifold.TSNE().fit_transform(sum([i[j]-i[0] for i in params_time_series]) / num_sims) for j in
+                 range(num_sims)]
+
+
+
+
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/config.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+from .normalizer import *
+import argparse
+import torch
+
+
+class Config:
+    DEVICE = torch.device('cpu') if not torch.cuda.is_available() else torch.device(0)
+    NOISY_LAYER_STD = 0.1
+    DEFAULT_REPLAY = 'replay'
+    PRIORITIZED_REPLAY = 'prioritized_replay'
+
+    def __init__(self):
+        self.parser = argparse.ArgumentParser()
+        self.task_fn = None
+        self.optimizer_fn = None
+        self.actor_optimizer_fn = None
+        self.critic_optimizer_fn = None
+        self.network_fn = None
+        self.actor_network_fn = None
+        self.critic_network_fn = None
+        self.replay_fn = None
+        self.random_process_fn = None
+        self.discount = None
+        self.target_network_update_freq = None
+        self.exploration_steps = None
+        self.log_level = 0
+        self.history_length = None
+        self.double_q = False
+        self.tag = 'vanilla'
+        self.num_workers = 1
+        self.gradient_clip = None
+        self.entropy_weight = 0
+        self.use_gae = False
+        self.gae_tau = 1.0
+        self.target_network_mix = 0.001
+        self.state_normalizer = RescaleNormalizer()
+        self.reward_normalizer = RescaleNormalizer()
+        self.min_memory_size = None
+        self.max_steps = 0
+        self.rollout_length = None
+        self.value_loss_weight = 1.0
+        self.iteration_log_interval = 30
+        self.categorical_v_min = None
+        self.categorical_v_max = None
+        self.categorical_n_atoms = 51
+        self.num_quantiles = None
+        self.optimization_epochs = 4
+        self.mini_batch_size = 64
+        self.termination_regularizer = 0
+        self.sgd_update_frequency = None
+        self.random_action_prob = None
+        self.__eval_env = None
+        self.log_interval = int(1e4)
+        self.save_interval = 0
+        self.eval_interval = 1000
+        self.eval_episodes = 100
+        self.async_actor = True
+        self.wrapper = False
+        self.tasks = False
+        self.replay_type = Config.DEFAULT_REPLAY
+        self.decaying_lr = False
+        self.shared_repr = False
+        self.noisy_linear = False
+        self.n_step = 1
+        self.clip_rewards = False
+        self.lexico = False
+        self.noise = None
+        self.noise_mode = 0
+        self.value_clip = -1
+        print('Using device:',self.DEVICE)
+
+    @property
+    def eval_env(self):
+        return self.__eval_env
+
+    @eval_env.setter
+    def eval_env(self, env):
+        self.__eval_env = env
+        self.state_dim = env.state_dim
+        self.action_dim = env.action_dim
+        self.task_name = env.name
+
+    def add_argument(self, *args, **kwargs):
+        self.parser.add_argument(*args, **kwargs)
+
+    def merge(self, config_dict=None):
+        if config_dict is None:
+            args = self.parser.parse_args()
+            config_dict = args.__dict__
+        for key in config_dict.keys():
+            setattr(self, key, config_dict[key])
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/noise_generator.py
+import numpy as np
+import gym
+import torch
+from ..utils import *
+
+# Noise Generator class. The noise generator in train mode can have different options based on what are the assumptions
+# of the knowledge.
+
+
+def make_noise(game, variance=0.5, bound=None, mode=0):
+    env = gym.make(game)
+    obs_space = env.observation_space
+    return NoiseGenerator(obs_space,variance,bound,mode)
+
+
+class NoiseGenerator:
+    def __init__(self,obs_space, variance=0.5, bound=None, mode=0):
+        self.obs_space = obs_space
+        self.image = False
+        try:
+            if 'image' in obs_space.spaces.keys():
+                self.image = True
+                self.dtype = np.int8
+                self.obs_space = obs_space['image']
+                self.shape = obs_space.spaces['image'].shape
+                self.low = obs_space.spaces['image'].low
+                self.high = obs_space.spaces['image'].high
+                self.var = variance
+            else:
+                self.dtype = np.float
+                self.shape = obs_space.shape
+                self.low = obs_space.low
+                self.high = obs_space.high
+                self.var = variance
+        except:
+            self.dtype = np.float
+            self.shape = obs_space.shape
+            self.low = obs_space.low
+            self.high = obs_space.high
+            self.var = variance
+        self.mode = mode
+        self.p_uniform = 0 # Probability of measuring true state in uniform noise
+        if bound is None:
+            if self.obs_space.is_bounded():
+                self.bound = self.high.min()
+                self.minbound = self.low.max()
+            else:
+                self.bound = 10 # random high bound for noise
+                self.minbound = -10  # random high bound for noise
+        else:
+            self.bound = min(self.high.min(), bound)
+            self.minbound = -self.bound
+        self.k = 0.5*(self.bound-self.minbound)
+
+    def set_noise(self,mode,bound=0,var=0):
+        self.mode = mode
+        if bound == 0:
+            self.bound = np.clip(self.high*0.1,0,100)
+            self.minbound = np.clip(self.low*0.1,-100,0)
+        else:
+            self.bound = bound
+            self.minbound = -bound
+        self.var = var
+
+    def set_bound(self,bound):
+        self.bound = bound
+
+    def nu(self,x):
+        if self.mode == 0:
+            # # Uniform unbounded noise
+            # if self.image:
+            #     noise = np.zeros_like(x)
+            #     for i, xi in enumerate(x):
+            #         if np.random.uniform() > self.p_uniform:
+            #             noise[i] = np.random.uniform(self.low, self.high, self.shape).astype(xi.dtype)
+            #         else:
+            #             noise[i] = xi
+            # else:
+            #     noise = np.zeros_like(x)
+            #     for i,xi in enumerate(x):
+            #         if np.random.uniform() > self.p_uniform:
+            #             noise[i] = np.random.uniform(self.minbound, self.bound, self.shape)
+            #         else: noise[i] = xi
+            raise NotImplementedError
+
+        elif self.mode == 1:
+            # Uniform bounded noise
+            noise = torch.rand_like(x)-0.5
+            return tensor(x+2*self.bound*noise)
+            # for i,xi in enumerate(x):
+            #     noise[i] = np.clip(np.add(np.random.uniform(self.bound, self.minbound, self.shape),np.asarray(xi)),
+            #                        self.low,self.high)if np.random.uniform() > self.p_uniform else xi
+            # return torch.tensor(noise)
+        elif self.mode == 2:
+            x = to_np(x)
+            noise = np.zeros_like(x)
+            for i,xi in enumerate(x):
+                noise[i] = np.clip(np.add(np.random.normal(0, self.var, size=self.shape)*np.mean(self.k),
+                                          np.asarray(xi)),
+                                   self.low,self.high).astype(xi.dtype)
+            return tensor(noise)
+
+    def adversarial_nu(self,x,policy,e=None):
+        if e is None:
+            e = self.bound
+        actions = policy.actor(x)
+        adv_states = get_state_kl_bound_sgld(policy, x, actions, e, 5, 0)
+        return tensor(adv_states)
+
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/__init__.py
+from .config import *
+from .normalizer import *
+from .misc import *
+from .logger import *
+from .plot import Plotter
+from .schedule import *
+from .torch_utils import *
+from .sum_tree import *
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/logger.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+from torch.utils.tensorboard import SummaryWriter
+import os
+import numpy as np
+import torch
+import logging
+
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s: %(message)s')
+from .misc import *
+
+
+def get_logger(tag='default', log_level=0):
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    if tag is not None:
+        fh = logging.FileHandler('./log/%s-%s.txt' % (tag, get_time_str()))
+        fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s: %(message)s'))
+        fh.setLevel(logging.INFO)
+        logger.addHandler(fh)
+    return Logger(logger, './tf_log/logger-%s-%s' % (tag, get_time_str()), log_level)
+
+
+class Logger(object):
+    def __init__(self, vanilla_logger, log_dir, log_level=0):
+        self.log_level = log_level
+        self.writer = None
+        if vanilla_logger is not None:
+            self.info = vanilla_logger.info
+            self.debug = vanilla_logger.debug
+            self.warning = vanilla_logger.warning
+        self.all_steps = {}
+        self.log_dir = log_dir
+
+    def lazy_init_writer(self):
+        if self.writer is None:
+            self.writer = SummaryWriter(self.log_dir)
+
+    def to_numpy(self, v):
+        if isinstance(v, torch.Tensor):
+            v = v.cpu().detach().numpy()
+        return v
+
+    def get_step(self, tag):
+        if tag not in self.all_steps:
+            self.all_steps[tag] = 0
+        step = self.all_steps[tag]
+        self.all_steps[tag] += 1
+        return step
+
+    def add_scalar(self, tag, value, step=None, log_level=0):
+        self.lazy_init_writer()
+        if log_level > self.log_level:
+            return
+        value = self.to_numpy(value)
+        if step is None:
+            step = self.get_step(tag)
+        if np.isscalar(value):
+            value = np.asarray([value])
+        self.writer.add_scalar(tag, value, step)
+
+    def add_histogram(self, tag, values, step=None, log_level=0):
+        self.lazy_init_writer()
+        if log_level > self.log_level:
+            return
+        values = self.to_numpy(values)
+        if step is None:
+            step = self.get_step(tag)
+        self.writer.add_histogram(tag, values, step)
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/sum_tree.py
+# Adapted from https://github.com/rlcode/per/blob/master/SumTree.py
+
+import numpy
+# SumTree
+# a binary tree data structure where the parent’s value is the sum of its children
+class SumTree:
+    write = 0
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.tree = numpy.zeros(2 * capacity - 1)
+        self.data = numpy.zeros(capacity, dtype=object)
+        self.n_entries = 0
+        self.pending_idx = set()
+
+    # update to the root node
+    def _propagate(self, idx, change):
+        parent = (idx - 1) // 2
+        self.tree[parent] += change
+        if parent != 0:
+            self._propagate(parent, change)
+
+    # find sample on leaf node
+    def _retrieve(self, idx, s):
+        left = 2 * idx + 1
+        right = left + 1
+
+        if left >= len(self.tree):
+            return idx
+
+        if s <= self.tree[left]:
+            return self._retrieve(left, s)
+        else:
+            return self._retrieve(right, s - self.tree[left])
+
+    def total(self):
+        return self.tree[0]
+
+    # store priority and sample
+    def add(self, p, data):
+        idx = self.write + self.capacity - 1
+        self.pending_idx.add(idx)
+
+        self.data[self.write] = data
+        self.update(idx, p)
+
+        self.write += 1
+        if self.write >= self.capacity:
+            self.write = 0
+
+        if self.n_entries < self.capacity:
+            self.n_entries += 1
+
+    # update priority
+    def update(self, idx, p):
+        if idx not in self.pending_idx:
+            return
+        self.pending_idx.remove(idx)
+        change = p - self.tree[idx]
+        self.tree[idx] = p
+        self._propagate(idx, change)
+
+    # get priority and sample
+    def get(self, s):
+        idx = self._retrieve(0, s)
+        dataIdx = idx - self.capacity + 1
+        self.pending_idx.add(idx)
+        return (idx, self.tree[idx], dataIdx)
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/schedule.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+class ConstantSchedule:
+    def __init__(self, val):
+        self.val = val
+
+    def __call__(self, steps=1):
+        return self.val
+
+
+class LinearSchedule:
+    def __init__(self, start, end=None, steps=None):
+        if end is None:
+            end = start
+            steps = 1
+        self.inc = (end - start) / float(steps)
+        self.current = start
+        self.end = end
+        if end > start:
+            self.bound = min
+        else:
+            self.bound = max
+
+    def __call__(self, steps=1):
+        val = self.current
+        self.current = self.bound(self.current + self.inc * steps, self.end)
+        return val
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/normalizer.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+import numpy as np
+import torch
+# from baselines.common.running_mean_std import RunningMeanStd
+
+
+#Functions from OpenAI Baselines
+class RunningMeanStd(object):
+    # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+    def __init__(self, epsilon=1e-4, shape=()):
+        self.mean = np.zeros(shape, 'float64')
+        self.var = np.ones(shape, 'float64')
+        self.count = epsilon
+
+    def update(self, x):
+        batch_mean = np.mean(x, axis=0)
+        batch_var = np.var(x, axis=0)
+        batch_count = x.shape[0]
+        self.update_from_moments(batch_mean, batch_var, batch_count)
+
+    def update_from_moments(self, batch_mean, batch_var, batch_count):
+        self.mean, self.var, self.count = update_mean_var_count_from_moments(
+            self.mean, self.var, self.count, batch_mean, batch_var, batch_count)
+
+def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
+    delta = batch_mean - mean
+    tot_count = count + batch_count
+
+    new_mean = mean + delta * batch_count / tot_count
+    m_a = var * count
+    m_b = batch_var * batch_count
+    M2 = m_a + m_b + np.square(delta) * count * batch_count / tot_count
+    new_var = M2 / tot_count
+    new_count = tot_count
+
+    return new_mean, new_var, new_count
+
+
+
+class BaseNormalizer:
+    def __init__(self, read_only=False):
+        self.read_only = read_only
+
+    def set_read_only(self):
+        self.read_only = True
+
+    def unset_read_only(self):
+        self.read_only = False
+
+    def state_dict(self):
+        return None
+
+    def load_state_dict(self, _):
+        return
+
+
+class MeanStdNormalizer(BaseNormalizer):
+    def __init__(self, read_only=False, clip=10.0, epsilon=1e-8):
+        BaseNormalizer.__init__(self, read_only)
+        self.read_only = read_only
+        self.rms = None
+        self.clip = clip
+        self.epsilon = epsilon
+
+    def __call__(self, x):
+        if isinstance(x,torch.Tensor):
+            x = np.asarray(x.cpu())
+        else:
+            x = np.asarray(x)
+        if self.rms is None:
+            self.rms = RunningMeanStd(shape=(1,) + x.shape[1:])
+        if not self.read_only:
+            self.rms.update(x)
+        return np.clip((x - self.rms.mean) / np.sqrt(self.rms.var + self.epsilon),
+                       -self.clip, self.clip)
+
+    def state_dict(self):
+        return {'mean': self.rms.mean,
+                'var': self.rms.var}
+
+    def load_state_dict(self, saved):
+        self.rms.mean = saved['mean']
+        self.rms.var = saved['var']
+
+class RescaleNormalizer(BaseNormalizer):
+    def __init__(self, coef=1.0):
+        BaseNormalizer.__init__(self)
+        self.coef = coef
+
+    def __call__(self, x):
+        if not isinstance(x, torch.Tensor):
+            x = np.asarray(x)
+        return self.coef * x
+
+
+class ImageNormalizer(RescaleNormalizer):
+    def __init__(self):
+        RescaleNormalizer.__init__(self, 1.0 / 255)
+
+
+class SignNormalizer(BaseNormalizer):
+    def __call__(self, x):
+        return np.sign(x)
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/utils/torch_utils.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+from .config import *
+import torch
+import os
+
+
+def select_device(gpu_id):
+    # if torch.cuda.is_available() and gpu_id >= 0:
+    if gpu_id >= 0:
+        Config.DEVICE = torch.device('cuda:%d' % (gpu_id))
+    else:
+        Config.DEVICE = torch.device('cpu')
+
+
+def tensor(x):
+    if isinstance(x, torch.Tensor):
+        return x
+    x = np.asarray(x, dtype=np.float32)
+    x = torch.from_numpy(x).to(Config.DEVICE)
+    return x
+
+
+def range_tensor(end):
+    return torch.arange(end).long().to(Config.DEVICE)
+
+
+def to_np(t):
+    return t.cpu().detach().numpy()
+
+
+def random_seed(seed=None):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def set_one_thread():
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    torch.set_num_threads(1)
+
+
+def huber(x, k=1.0):
+    return torch.where(x.abs() < k, 0.5 * x.pow(2), k * (x.abs() - 0.5 * k))
+
+
+def epsilon_greedy(epsilon, x):
+    if len(x.shape) == 1:
+        return np.random.randint(len(x)) if np.random.rand() < epsilon else np.argmax(x)
+    elif len(x.shape) == 2:
+        random_actions = np.random.randint(x.shape[1], size=x.shape[0])
+        greedy_actions = np.argmax(x, axis=-1)
+        dice = np.random.rand(x.shape[0])
+        return np.where(dice < epsilon, random_actions, greedy_actions)
+
+
+def sync_grad(target_network, src_network):
+    for param, src_param in zip(target_network.parameters(), src_network.parameters()):
+        if src_param.grad is not None:
+            param._grad = src_param.grad.clone()
+
+
+# adapted from https://github.com/pytorch/pytorch/issues/12160
+def batch_diagonal(input):
+    # idea from here: https://discuss.pytorch.org/t/batch-of-diagonal-matrix/13560
+    # batches a stack of vectors (batch x N) -> a stack of diagonal matrices (batch x N x N)
+    # works in  2D -> 3D, should also work in higher dimensions
+    # make a zero matrix, which duplicates the last dim of input
+    dims = input.size()
+    dims = dims + dims[-1:]
+    output = torch.zeros(dims, device=input.device)
+    # stride across the first dimensions, add one to get the diagonal of the last dimension
+    strides = [output.stride(i) for i in range(input.dim() - 1)]
+    strides.append(output.size(-1) + 1)
+    # stride and copy the input to the diagonal
+    output.as_strided(input.size(), strides).copy_(input)
+    return output
+
+
+def batch_trace(input):
+    i = range_tensor(input.size(-1))
+    t = input[:, i, i].sum(-1).unsqueeze(-1).unsqueeze(-1)
+    return t
+
+
+class DiagonalNormal:
+    def __init__(self, mean, std):
+        self.dist = torch.distributions.Normal(mean, std)
+        self.sample = self.dist.sample
+
+    def log_prob(self, action):
+        return self.dist.log_prob(action).sum(-1).unsqueeze(-1)
+
+    def entropy(self):
+        return self.dist.entropy().sum(-1).unsqueeze(-1)
+
+    def cdf(self, action):
+        return self.dist.cdf(action).prod(-1).unsqueeze(-1)
+
+
+class BatchCategorical:
+    def __init__(self, logits):
+        self.pre_shape = logits.size()[:-1]
+        logits = logits.view(-1, logits.size(-1))
+        self.dist = torch.distributions.Categorical(logits=logits)
+
+    def log_prob(self, action):
+        log_pi = self.dist.log_prob(action.view(-1))
+        log_pi = log_pi.view(action.size()[:-1] + (-1,))
+        return log_pi
+
+    def entropy(self):
+        ent = self.dist.entropy()
+        ent = ent.view(self.pre_shape + (-1,))
+        return ent
+
+    def sample(self, sample_shape=torch.Size([])):
+        ret = self.dist.sample(sample_shape)
+        ret = ret.view(sample_shape + self.pre_shape + (-1,))
+        return ret
+
+
+class Grad:
+    def __init__(self, network=None, grads=None):
+        if grads is not None:
+            self.grads = grads
+        else:
+            self.grads = []
+            for param in network.parameters():
+                self.grads.append(torch.zeros(param.data.size(), device=Config.DEVICE))
+
+    def add(self, op):
+        if isinstance(op, Grad):
+            for grad, op_grad in zip(self.grads, op.grads):
+                grad.add_(op_grad)
+        elif isinstance(op, torch.nn.Module):
+            for grad, param in zip(self.grads, op.parameters()):
+                if param.grad is not None:
+                    grad.add_(param.grad)
+        return self
+
+    def mul(self, coef):
+        for grad in self.grads:
+            grad.mul_(coef)
+        return self
+
+    def assign(self, network):
+        for grad, param in zip(self.grads, network.parameters()):
+            param._grad = grad.clone()
+
+    def zero(self):
+        for grad in self.grads:
+            grad.zero_()
+
+    def clone(self):
+        return Grad(grads=[grad.clone() for grad in self.grads])
+
+
+class Grads:
+    def __init__(self, network=None, n=0, grads=None):
+        if grads is not None:
+            self.grads = grads
+        else:
+            self.grads = [Grad(network) for _ in range(n)]
+
+    def clone(self):
+        return Grads(grads=[grad.clone() for grad in self.grads])
+
+    def mul(self, op):
+        if np.isscalar(op):
+            for grad in self.grads:
+                grad.mul(op)
+        elif isinstance(op, torch.Tensor):
+            op = op.view(-1)
+            for i, grad in enumerate(self.grads):
+                grad.mul(op[i])
+        else:
+            raise NotImplementedError
+        return self
+
+    def add(self, op):
+        if np.isscalar(op):
+            for grad in self.grads:
+                grad.mul(op)
+        elif isinstance(op, Grads):
+            for grad, op_grad in zip(self.grads, op.grads):
+                grad.add(op_grad)
+        elif isinstance(op, torch.Tensor):
+            op = op.view(-1)
+            for i, grad in enumerate(self.grads):
+                grad.mul(op[i])
+        else:
+            raise NotImplementedError
+        return self
+
+    def mean(self):
+        grad = self.grads[0].clone()
+        grad.zero()
+        for g in self.grads:
+            grad.add(g)
+        grad.mul(1 / len(self.grads))
+        return grad
+
+
+def escape_float(x):
+    return ('%s' % x).replace('.', '\.')
+
+
+def get_state_kl_bound_sgld(network, batch_states, batch_action_means, eps, steps, stdev):
+    #SGDL Solver for minimizing KL distance. Adapted from https://github.com/huanzhang12/SA_PPO/
+    if batch_action_means is None:
+        # Not provided. We need to compute them.
+        with torch.no_grad():
+            batch_action_means, _ = network.actor(batch_states)
+    else:
+        batch_action_means = batch_action_means.detach()
+    # upper and lower bounds for clipping
+    states_ub = batch_states + eps
+    states_lb = batch_states - eps
+    step_eps = eps / steps
+    # SGLD noise factor. We set (inverse) beta=1e-5 as gradients are relatively small here.
+    beta = 1e-5
+    noise_factor = np.sqrt(2 * step_eps * beta)
+    noise = torch.randn_like(batch_states) * noise_factor
+    var_states = (batch_states.clone() + noise.sign() * step_eps).detach().requires_grad_()
+    for i in range(steps):
+        # Find a nearby state new_phi that maximize the difference
+        diff = network.actor(var_states) - batch_action_means
+        kl = (diff * diff).sum(axis=-1, keepdim=True).mean()
+        # Need to clear gradients before the backward() for policy_loss
+        kl.backward()
+        # Reduce noise at every step.
+        noise_factor = np.sqrt(2 * step_eps * beta) / (i+2)
+        # Project noisy gradient to step boundary.
+        update = (var_states.grad + noise_factor * torch.randn_like(var_states)).sign() * step_eps
+        var_states.data += update
+        # clip into the upper and lower bounds
+        var_states = torch.max(var_states, states_lb)
+        var_states = torch.min(var_states, states_ub)
+        var_states = var_states.detach().requires_grad_()
+    network.zero_grad()
+    # diff = (net(var_states.requires_grad_(False))[0] - batch_action_means)
+    return var_states
+
+def get_actor_parameters(agent):
+    network = agent.network
+    actor_body = network.actor_body.state_dict()
+    fc_action = network.fc_action.state_dict()
+    return {'body':actor_body,'fc':fc_action}
+
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/agent/BaseAgent.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+import torch
+import numpy as np
+from ..utils import *
+from ..utils.noise_generator import make_noise
+import torch.multiprocessing as mp
+from collections import deque
+from skimage.io import imsave
+
+class BaseAgent:
+    def __init__(self, config, noise=None):
+        self.config = config
+        self.logger = get_logger(tag=config.tag, log_level=config.log_level)
+        self.task_ind = 0
+        self.noise = noise
+        self.netparams = []
+
+    def close(self):
+        close_obj(self.task)
+
+    def save(self, filename):
+        torch.save(self.network.state_dict(), '%s.model' % (filename))
+        with open('%s.stats' % (filename), 'wb') as f:
+            pickle.dump(self.config.state_normalizer.state_dict(), f)
+
+    def load(self, filename):
+        state_dict = torch.load('%s.model' % filename, map_location=lambda storage, loc: storage)
+        self.network.load_state_dict(state_dict)
+        with open('%s.stats' % (filename), 'rb') as f:
+            self.config.state_normalizer.load_state_dict(pickle.load(f))
+
+    def eval_step(self, state):
+        raise NotImplementedError
+
+    def eval_episode(self):
+        env = self.config.eval_env
+        state = env.reset()
+        while True:
+            action = self.eval_step(state)
+            state, reward, done, info = env.step(action)
+            ret = info[0]['episodic_return']
+            if ret is not None:
+                break
+        return ret
+
+    def eval_episodes(self):
+        episodic_returns = []
+        for ep in range(self.config.eval_episodes):
+            total_rewards = self.eval_episode()
+            episodic_returns.append(np.sum(total_rewards))
+        self.logger.info('steps %d, episodic_return_test %.2f(%.2f)' % (
+            self.total_steps, np.mean(episodic_returns), np.std(episodic_returns) / np.sqrt(len(episodic_returns))
+        ))
+        self.logger.add_scalar('episodic_return_test', np.mean(episodic_returns), self.total_steps)
+        return {
+            'episodic_return_test': np.mean(episodic_returns),
+        }
+
+    def eval_noisy_episode(self):
+        env = self.config.eval_env
+        state = env.reset()
+        while True:
+            action = self.eval_step(self.noise.nu(tensor(state).cpu()).to(self.config.DEVICE))
+            state, reward, done, info = env.step(action)
+            ret = info[0]['episodic_return']
+            if ret is not None:
+                break
+        return ret
+
+    def eval_adv_episode(self):
+        env = self.config.eval_env
+        state = env.reset()
+        while True:
+            action = self.eval_step(self.noise.adversarial_nu(tensor(state).cpu(),self.network).to(self.config.DEVICE))
+            state, reward, done, info = env.step(action)
+            ret = info[0]['episodic_return']
+            if ret is not None:
+                break
+        return ret
+
+    def eval_noisy_episodes(self,mode=0,bound=10):
+        episodic_returns = []
+        # if self.noise is None:
+        self.noise = make_noise(self.config.game,mode=mode,bound=bound)
+        for ep in range(self.config.eval_episodes):
+            total_rewards = self.eval_noisy_episode()
+            episodic_returns.append(np.sum(total_rewards))
+        self.logger.info('steps %d, episodic_return_noise %.2f(%.2f)' % (
+            self.total_steps, np.mean(episodic_returns), np.std(episodic_returns) / np.sqrt(len(episodic_returns))
+        ))
+        self.logger.add_scalar('episodic_return_noise', np.mean(episodic_returns), self.total_steps)
+        return {
+            'episodic_return_noise': np.mean(episodic_returns),
+        }
+
+    def eval_adv_episodes(self,bound=10):
+        episodic_returns = []
+        # if self.noise is None:
+        self.noise = make_noise(self.config.game,mode='adv',bound=bound)
+        for ep in range(self.config.eval_episodes):
+            total_rewards = self.eval_adv_episode()
+            episodic_returns.append(np.sum(total_rewards))
+        self.logger.info('steps %d, episodic_return_noise %.2f(%.2f)' % (
+            self.total_steps, np.mean(episodic_returns), np.std(episodic_returns) / np.sqrt(len(episodic_returns))
+        ))
+        self.logger.add_scalar('episodic_return_noise', np.mean(episodic_returns), self.total_steps)
+        return {
+            'episodic_return_noise': np.mean(episodic_returns),
+        }
+
+    def record_online_return(self, info, offset=0):
+        if isinstance(info, dict):
+            ret = info['episodic_return']
+            if ret is not None:
+                self.logger.add_scalar('episodic_return_train', ret, self.total_steps + offset)
+                if not self.total_steps%200:
+                    self.logger.info('steps %d, episodic_return_train %s' % (self.total_steps + offset, ret))
+        elif isinstance(info, tuple):
+            for i, info_ in enumerate(info):
+                self.record_online_return(info_, i)
+        else:
+            raise NotImplementedError
+
+    def switch_task(self):
+        config = self.config
+        if not config.tasks:
+            return
+        segs = np.linspace(0, config.max_steps, len(config.tasks) + 1)
+        if self.total_steps > segs[self.task_ind + 1]:
+            self.task_ind += 1
+            self.task = config.tasks[self.task_ind]
+            self.states = self.task.reset()
+            self.states = config.state_normalizer(self.states)
+
+    def record_episode(self, dir, env):
+        mkdir(dir)
+        steps = 0
+        state = env.reset()
+        while True:
+            self.record_obs(env, dir, steps)
+            action = self.record_step(state)
+            state, reward, done, info = env.step(action)
+            ret = info[0]['episodic_return']
+            steps += 1
+            if ret is not None:
+                break
+
+    def record_step(self, state):
+        raise NotImplementedError
+
+    # For DMControl
+    def record_obs(self, env, dir, steps):
+        env = env.env.envs[0]
+        obs = env.render(mode='rgb_array')
+        imsave('%s/%04d.png' % (dir, steps), obs)
+
+    def log_progress(self):
+        self.logger.add_scalar('Loss_Primary', self.recent_losses[0][-1], self.total_steps)
+        self.logger.add_scalar('Loss_Secondary', self.recent_losses[1][-1], self.total_steps)
+
+    def save_network(self):
+        weights = to_np(self.network.fc_action.state_dict().copy()['weight'].cpu())
+        bias = to_np(self.network.fc_action.state_dict().copy()['bias'].cpu())
+        self.netparams.append(np.concatenate([np.copy(weights), np.copy(bias)]))
+
+class BaseActor(mp.Process):
+    STEP = 0
+    RESET = 1
+    EXIT = 2
+    SPECS = 3
+    NETWORK = 4
+    CACHE = 5
+
+    def __init__(self, config):
+        mp.Process.__init__(self)
+        self.config = config
+        self.__pipe, self.__worker_pipe = mp.Pipe()
+
+        self._state = None
+        self._task = None
+        self._network = None
+        self._total_steps = 0
+        self.__cache_len = 2
+
+        if not config.async_actor:
+            self.start = lambda: None
+            self.step = self._sample
+            self.close = lambda: None
+            self._set_up()
+            self._task = config.task_fn()
+
+    def _sample(self):
+        transitions = []
+        for _ in range(self.config.sgd_update_frequency):
+            transition = self._transition()
+            if transition is not None:
+                transitions.append(transition)
+        return transitions
+
+    def run(self):
+        self._set_up()
+        config = self.config
+        self._task = config.task_fn()
+
+        cache = deque([], maxlen=2)
+        while True:
+            op, data = self.__worker_pipe.recv()
+            if op == self.STEP:
+                if not len(cache):
+                    cache.append(self._sample())
+                    cache.append(self._sample())
+                self.__worker_pipe.send(cache.popleft())
+                cache.append(self._sample())
+            elif op == self.EXIT:
+                self.__worker_pipe.close()
+                return
+            elif op == self.NETWORK:
+                self._network = data
+            else:
+                raise NotImplementedError
+
+    def _transition(self):
+        raise NotImplementedError
+
+    def _set_up(self):
+        pass
+
+    def step(self):
+        self.__pipe.send([self.STEP, None])
+        return self.__pipe.recv()
+
+    def close(self):
+        self.__pipe.send([self.EXIT, None])
+        self.__pipe.close()
+
+    def set_network(self, net):
+        if not self.config.async_actor:
+            self._network = net
+        else:
+            self.__pipe.send([self.NETWORK, net])
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/agent/DDPG_agent.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+import torch
+
+from ..network import *
+from ..component import *
+from .BaseAgent import *
+import torchvision
+import collections
+from gym.spaces.discrete import Discrete
+
+
+class DDPGAgent(BaseAgent):
+    def __init__(self, config, noise=None):
+        BaseAgent.__init__(self, config, noise=noise)
+        self.config = config
+        self.lexico = config.lexico
+        if self.lexico:
+            # Lexicographic Robustness
+            self.i = None
+            self.mu = [0.0 for _ in range(1)]
+            self.j = [0.0 for _ in range(1)]
+            self.recent_losses = [collections.deque(maxlen=25) for i in range(2)]
+            self.beta = list(reversed(range(1, 3)))
+            self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
+            self.second_order = False
+            self.tau = 0.01
+        self.task = config.task_fn()
+        self.network = config.network_fn()
+        self.target_network = config.network_fn()
+        self.target_network.load_state_dict(self.network.state_dict())
+        self.replay = config.replay_fn()
+        self.random_process = config.random_process_fn()
+        self.total_steps = 0
+        self.is_discrete = isinstance(self.task.action_space, Discrete)
+        if self.is_discrete:
+            self.loss_bound = 0.5
+        else:
+            self.loss_bound = 5
+        self.state = None
+
+    def soft_update(self, target, src):
+        for target_param, param in zip(target.parameters(), src.parameters()):
+            target_param.detach_()
+            target_param.copy_(target_param * (1.0 - self.config.target_network_mix) +
+                               param * self.config.target_network_mix)
+
+    def eval_step(self, state):
+        self.config.state_normalizer.set_read_only()
+        state = self.config.state_normalizer(state)
+        action = self.network(state)
+        self.config.state_normalizer.unset_read_only()
+        if self.is_discrete:
+            # action = torch.distributions.Categorical(probs=action).sample()
+            action = epsilon_greedy(self.exploration, action['action'].detach())
+            return action
+        return to_np(action)
+
+    def step(self):
+        config = self.config
+        if self.state is None:
+            self.random_process.reset_states()
+            self.state = self.task.reset()
+            self.state = config.state_normalizer(self.state)
+
+        if self.total_steps < config.warm_up:
+            if self.is_discrete:
+                pi = F.normalize(torch.rand((1,self.task.action_dim)),p=1,dim=1)
+                action = to_np(torch.argmax(pi).unsqueeze(0))
+            else:
+                action = [self.task.action_space.sample()]
+                pi = None
+        else:
+            action = self.network(self.state)
+            action = to_np(action)
+            action += self.random_process.sample()
+            action = np.clip(action, self.task.action_space.low, self.task.action_space.high)
+            pi = None
+        next_state, reward, done, info = self.task.step(action)
+        next_state = self.config.state_normalizer(next_state)
+        self.record_online_return(info)
+        reward = self.config.reward_normalizer(reward)
+
+        self.replay.feed(dict(
+            state=self.state,
+            action=action,
+            reward=reward,
+            # pi=None,
+            next_state=next_state,
+            mask=1-np.asarray(done, dtype=np.int32),
+        ))
+
+        if done[0]:
+            self.random_process.reset_states()
+        self.state = next_state
+        self.total_steps += 1
+
+        if self.replay.size() >= config.warm_up:
+            transitions = self.replay.sample()
+            states = tensor(transitions.state)
+            actions = tensor(transitions.action)
+            rewards = tensor(transitions.reward).unsqueeze(-1)
+            next_states = tensor(transitions.next_state)
+            mask = tensor(transitions.mask).unsqueeze(-1)
+
+            phi_next = self.target_network.feature(next_states)
+            a_next = self.target_network.actor(phi_next)
+            q_next = self.target_network.critic(phi_next, a_next)
+            q_next = config.discount * mask * q_next
+            q_next.add_(rewards)
+            q_next = q_next.detach()
+            phi = self.network.feature(states)
+            q = self.network.critic(phi, actions)
+
+            critic_loss = (q - q_next).pow(2).mul(0.5).sum(-1).mean()
+
+            self.network.zero_grad()
+            critic_loss.backward()
+            self.network.critic_opt.step()
+
+            phi = self.network.feature(states)
+            action = self.network.actor(phi)
+            policy_loss = -self.network.critic(phi.detach(), action).mean()
+            if self.lexico and self.total_steps > self.config.max_steps/3:
+                weights = self.compute_weights()
+                robust_loss = self.robust_loss(states,action)
+                self.recent_losses[0].append(-policy_loss)
+                self.recent_losses[1].append(robust_loss)
+                self.network.zero_grad()
+                (policy_loss + robust_loss * weights[1]/weights[0]).backward()
+                # nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+                self.network.actor_opt.step()
+            else:
+                self.network.zero_grad()
+                policy_loss.backward()
+                self.network.actor_opt.step()
+
+            self.soft_update(self.target_network, self.network)
+
+    def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
+        # If not enough updates have been performed, assume not converged
+        if len(self.recent_losses[self.i]) < minimum_updates:
+            return False
+        else:
+            l_mean = torch.tensor(self.recent_losses[self.i]).mean().float()
+            # If the mean loss is lower than some absolute bound, assume converged
+            if l_mean < bound:
+                return True
+            # Else check if the max of the recent losses are sufficiently close to the mean, if so then assume converged
+            else:
+                l_max = max(self.recent_losses[self.i]).float()
+                if l_max > (1.0 + tolerance) * l_mean:
+                    return False
+
+        return True
+
+    def update_lagrange(self):
+        # Save relevant loss information for updating Lagrange parameters
+        for i in range(1):
+            self.j[i] = -torch.tensor(self.recent_losses[i]).mean()
+        # Update Lagrange parameters
+        for i in range(1):
+            self.mu[i] += self.eta[i] * (self.j[i] - self.tau*self.j[i] - self.recent_losses[i][-1])
+            self.mu[i] = max(self.mu[i], 0.0)
+
+    def compute_weights(self):
+        reward_range = 2
+        # Compute weights for different components of the first order objective terms
+        first_order = []
+        for i in range(reward_range - 1):
+            w = self.beta[i] + self.mu[i] * sum([self.beta[j] for j in range(i + 1, reward_range)])
+            first_order.append(w)
+        first_order.append(self.beta[reward_range - 1])
+        first_order_weights = torch.tensor(first_order)
+        return first_order_weights
+
+    def robust_loss(self,states,actions):
+        self.config.state_normalizer.set_read_only()
+        disturbed = self.noise.nu(states)
+        target = self.network.actor(self.network.feature(self.config.state_normalizer(disturbed)))
+        self.config.state_normalizer.unset_read_only()
+        loss = 0.5 * (actions.detach()-target).pow(2).mean()
+        return torch.clip(loss,-self.loss_bound,self.loss_bound)
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/agent/__init__.py
+from .DDPG_agent import *
+from .A2C_agent import *
+from .PPO_agent import *
+# from .DQN_PG_agent import *
+# from .A2C_test_robustness import *
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/agent/PPO_agent.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+import torch.nn
+
+from ..network import *
+from ..component import *
+from .BaseAgent import *
+import collections
+from gym.spaces.box import Box
+from gym.spaces.discrete import Discrete
+
+
+class PPOAgent(BaseAgent):
+    def __init__(self, config, noise=None):
+        BaseAgent.__init__(self, config, noise=noise)
+        self.config = config
+        self.lexico = config.lexico
+        if self.lexico:
+            # Lexicographic Robustness
+            self.i = None
+            self.mu = [0.0 for _ in range(1)]
+            self.j = [0.0 for _ in range(1)]
+            self.recent_losses = [collections.deque(maxlen=25) for i in range(2)]
+            self.beta = list(reversed(range(1, 3)))
+            self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
+            self.second_order = False
+            self.tau = 0.01
+        self.task = config.task_fn()
+        self.network = config.network_fn()
+        if config.shared_repr:
+            self.opt = config.optimizer_fn(self.network.parameters())
+            self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.opt, lambda step: 1 - step / config.max_steps)
+        else:
+            self.actor_opt = config.actor_opt_fn(self.network.actor_params)
+            self.critic_opt = config.critic_opt_fn(self.network.critic_params)
+            if config.decaying_lr:
+                # anneal lr
+                l = lambda f: 1 - f / self.config.max_steps
+                self.lr_scheduler_policy = torch.optim.lr_scheduler.LambdaLR(self.actor_opt, lr_lambda=l)
+                self.lr_scheduler_value = torch.optim.lr_scheduler.LambdaLR(self.critic_opt, lr_lambda=l)
+        self.total_steps = 0
+        self.states = self.task.reset()
+        self.states = config.state_normalizer(self.states)
+        self.is_discrete = isinstance(self.task.action_space, Discrete)
+        if self.is_discrete:
+            self.loss_bound = 0.5
+        else:
+            self.loss_bound = 5
+
+    def step(self):
+        config = self.config
+        storage = Storage(config.rollout_length)
+        states = self.states
+        for _ in range(config.rollout_length):
+            prediction = self.network(states)
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['action']))
+            self.record_online_return(info)
+            rewards = config.reward_normalizer(rewards)
+            next_states = config.state_normalizer(next_states)
+            storage.feed(prediction)
+            storage.feed({'reward': tensor(rewards).unsqueeze(-1),
+                         'mask': tensor(1 - terminals).unsqueeze(-1),
+                         'state': tensor(states)})
+            states = next_states
+            self.total_steps += config.num_workers
+
+        self.states = states
+        prediction = self.network(states)
+        storage.feed(prediction)
+        storage.placeholder()
+
+        advantages = tensor(np.zeros((config.num_workers, 1)))
+        returns = prediction['v'].detach()
+        for i in reversed(range(config.rollout_length)):
+            returns = storage.reward[i] + config.discount * storage.mask[i] * returns
+            if not config.use_gae:
+                advantages = returns - storage.v[i].detach()
+            else:
+                td_error = storage.reward[i] + config.discount * storage.mask[i] * storage.v[i + 1] - storage.v[i]
+                advantages = advantages * config.gae_tau * config.discount * storage.mask[i] + td_error
+            storage.advantage[i] = advantages.detach()
+            storage.ret[i] = returns.detach()
+
+        entries = storage.extract(['log_pi_a','action', 'v', 'ret', 'advantage', 'entropy', 'pi', 'state'])
+        EntryCLS = entries.__class__
+        entries = EntryCLS(*list(map(lambda x: x.detach(), entries)))
+        entries.advantage.copy_((entries.advantage - entries.advantage.mean()) / entries.advantage.std())
+
+        for _ in range(config.optimization_epochs):
+            sampler = random_sample(np.arange(entries.state.size(0)), config.mini_batch_size)
+            for batch_indices in sampler:
+                batch_indices = tensor(batch_indices).long()
+                entry = EntryCLS(*list(map(lambda x: x[batch_indices], entries)))
+
+                prediction = self.network(entry.state, entry.action)
+                ratio = (prediction['log_pi_a'] - entry.log_pi_a).exp()
+                obj = ratio * entry.advantage
+                obj_clipped = ratio.clamp(1.0 - self.config.ppo_ratio_clip,
+                                          1.0 + self.config.ppo_ratio_clip) * entry.advantage
+                policy_loss = -torch.min(obj, obj_clipped).mean() - config.entropy_weight * prediction['entropy'].mean()
+                if config.value_clip != -1:
+                    value_loss = 0.5 * (torch.clamp(entry.ret - prediction['v'],-config.value_clip,config.value_clip)).pow(2).mean()
+                else:
+                    value_loss = 0.5 * (entry.ret - prediction['v']).pow(2).mean()
+                approx_kl = (entry.log_pi_a - prediction['log_pi_a']).mean()
+                if config.shared_repr:
+                    if self.lexico and self.total_steps > self.config.max_steps/3:
+                        weights = self.compute_weights()
+                        robust_loss = self.robust_loss(entry.state.detach(),entry.pi.detach())
+                        self.recent_losses[0].append(-policy_loss.mean())
+                        self.recent_losses[1].append(-robust_loss)
+                        self.update_lagrange()
+                        self.opt.zero_grad()
+                        # print("Policy loss: ", policy_loss)
+                        # print("robust loss: ", robust_loss)
+                        (policy_loss + robust_loss*weights[1]/weights[0] +
+                         value_loss).backward()
+                        nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+                        self.opt.step()
+                    else:
+                        self.opt.zero_grad()
+                        (policy_loss + value_loss).backward()
+                        nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+                        self.opt.step()
+                else:
+                    if approx_kl <= 1.5 * config.target_kl:
+                        if self.lexico and self.total_steps > self.config.max_steps/3:
+                            weights = self.compute_weights()
+                            robust_loss = self.robust_loss(entry.state,entry.pi)
+                            self.recent_losses[0].append(-policy_loss.mean())
+                            self.recent_losses[1].append(robust_loss)
+                            self.actor_opt.zero_grad()
+                            (policy_loss*weights[0] + robust_loss*weights[1]).backward()
+                            self.actor_opt.step()
+                        else:
+                            self.actor_opt.zero_grad()
+                            policy_loss.backward()
+                            self.actor_opt.step()
+                    self.critic_opt.zero_grad()
+                    value_loss.backward()
+                    self.critic_opt.step()
+
+        if config.decaying_lr:
+            if config.shared_repr:
+                self.lr_scheduler.step()
+            else:
+                self.lr_scheduler_policy.step()
+                self.lr_scheduler_value.step()
+
+    def eval_step(self, state):
+        prediction = self.network(self.config.state_normalizer(state))
+        action = to_np(prediction['action'])
+        if isinstance(self.task.action_space, Box):
+            action = np.clip(action, self.task.action_space.low, self.task.action_space.high)
+        return action
+
+    def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
+        # If not enough updates have been performed, assume not converged
+        if len(self.recent_losses[self.i]) < minimum_updates:
+            return False
+        else:
+            l_mean = torch.tensor(self.recent_losses[self.i]).mean().float()
+            # If the mean loss is lower than some absolute bound, assume converged
+            if l_mean < bound:
+                return True
+            # Else check if the max of the recent losses are sufficiently close to the mean, if so then assume converged
+            else:
+                l_max = max(self.recent_losses[self.i]).float()
+                if l_max > (1.0 + tolerance) * l_mean:
+                    return False
+        return True
+
+    def update_lagrange(self):
+        # Save relevant loss information for updating Lagrange parameters
+        for i in range(1):
+            self.j[i] = torch.tensor(self.recent_losses[i]).mean()
+        # Update Lagrange parameters
+        for i in range(1):
+            self.mu[i] += self.eta[i] * (self.j[i] - self.tau*self.j[i] - self.recent_losses[i][-1])
+            self.mu[i] = max(self.mu[i], 0.0)
+            #self.tau *= 0.999
+
+    def compute_weights(self):
+        reward_range = 2
+        # Compute weights for different components of the first order objective terms
+        first_order = []
+        for i in range(reward_range - 1):
+            w = self.beta[i] + self.mu[i] * sum([self.beta[j] for j in range(i + 1, reward_range)])
+            first_order.append(w)
+        first_order.append(self.beta[reward_range - 1])
+        first_order_weights = torch.tensor(first_order)
+        return first_order_weights
+
+    def robust_loss(self,states,actions):
+        self.config.state_normalizer.set_read_only()
+        disturbed = self.noise.nu(states)
+        target = self.network.actor(self.config.state_normalizer(disturbed))
+        self.config.state_normalizer.unset_read_only()
+        loss = 0.5 * (actions.detach()-target).pow(2).mean()
+        return torch.clip(loss,-self.loss_bound,self.loss_bound)
+
+
+class SAPPOAgent(BaseAgent):
+    def __init__(self, config, noise=None):
+        BaseAgent.__init__(self, config, noise=noise)
+        self.config = config
+        self.kppo = config.kppo
+        self.task = config.task_fn()
+        self.network = config.network_fn()
+        self.sgld_network = config.network_fn()
+        self.sgld_network.load_state_dict(self.network.state_dict())
+        if config.shared_repr:
+            self.opt = config.optimizer_fn(self.network.parameters())
+            self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.opt, lambda step: 1 - step / config.max_steps)
+        else:
+            self.actor_opt = config.actor_opt_fn(self.network.actor_params)
+            self.critic_opt = config.critic_opt_fn(self.network.critic_params)
+            if config.decaying_lr:
+                # anneal lr
+                l = lambda f: 1 - f / self.config.max_steps
+                self.lr_scheduler_policy = torch.optim.lr_scheduler.LambdaLR(self.actor_opt, lr_lambda=l)
+                self.lr_scheduler_value = torch.optim.lr_scheduler.LambdaLR(self.critic_opt, lr_lambda=l)
+        self.total_steps = 0
+        self.states = self.task.reset()
+        self.states = config.state_normalizer(self.states)
+
+    def step(self):
+        config = self.config
+        storage = Storage(config.rollout_length)
+        states = self.states
+        for _ in range(config.rollout_length):
+            prediction = self.network(states)
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['action']))
+            self.record_online_return(info)
+            rewards = config.reward_normalizer(rewards)
+            next_states = config.state_normalizer(next_states)
+            storage.feed(prediction)
+            storage.feed({'reward': tensor(rewards).unsqueeze(-1),
+                         'mask': tensor(1 - terminals).unsqueeze(-1),
+                         'state': tensor(states)})
+            states = next_states
+            self.total_steps += config.num_workers
+        self.states = states
+        prediction = self.network(states)
+        storage.feed(prediction)
+        storage.placeholder()
+
+        advantages = tensor(np.zeros((config.num_workers, 1)))
+        returns = prediction['v'].detach()
+        for i in reversed(range(config.rollout_length)):
+            returns = storage.reward[i] + config.discount * storage.mask[i] * returns
+            if not config.use_gae:
+                advantages = returns - storage.v[i].detach()
+            else:
+                td_error = storage.reward[i] + config.discount * storage.mask[i] * storage.v[i + 1] - storage.v[i]
+                advantages = advantages * config.gae_tau * config.discount * storage.mask[i] + td_error
+            storage.advantage[i] = advantages.detach()
+            storage.ret[i] = returns.detach()
+
+        entries = storage.extract(['log_pi_a','action', 'v', 'ret', 'advantage', 'entropy', 'pi', 'state'])
+        EntryCLS = entries.__class__
+        entries = EntryCLS(*list(map(lambda x: x.detach(), entries)))
+        entries.advantage.copy_((entries.advantage - entries.advantage.mean()) / entries.advantage.std())
+
+        for _ in range(config.optimization_epochs):
+            sampler = random_sample(np.arange(entries.state.size(0)), config.mini_batch_size)
+            for batch_indices in sampler:
+                batch_indices = tensor(batch_indices).long()
+                entry = EntryCLS(*list(map(lambda x: x[batch_indices], entries)))
+
+                prediction = self.network(entry.state, entry.action)
+                ratio = (prediction['log_pi_a'] - entry.log_pi_a).exp()
+                obj = ratio * entry.advantage
+                obj_clipped = ratio.clamp(1.0 - self.config.ppo_ratio_clip,
+                                          1.0 + self.config.ppo_ratio_clip) * entry.advantage
+                policy_loss = -torch.min(obj, obj_clipped).mean() - config.entropy_weight * prediction['entropy'].mean()
+                if self.config.lexico and self.total_steps > self.config.max_steps/3:
+                    sa_loss = self.kppo*self.sa_loss(entry.state,entry.pi)
+                else:
+                    sa_loss = 0
+                if config.value_clip != -1:
+                    value_loss = 0.5 * (torch.clamp(entry.ret - prediction['v'],-config.value_clip,config.value_clip)).pow(2).mean()
+                else:
+                    value_loss = 0.5 * (entry.ret - prediction['v']).pow(2).mean()
+                approx_kl = (entry.log_pi_a - prediction['log_pi_a']).mean()
+                if config.shared_repr:
+                    self.opt.zero_grad()
+                    (policy_loss + sa_loss+ value_loss).backward()
+                    nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+                    self.opt.step()
+                else:
+                    if approx_kl <= 1.5 * config.target_kl:
+                        self.actor_opt.zero_grad()
+                        (policy_loss+sa_loss).backward()
+                        self.actor_opt.step()
+                    self.critic_opt.zero_grad()
+                    value_loss.backward()
+                    self.critic_opt.step()
+                self.sgld_network.load_state_dict(self.network.state_dict())
+
+        if config.decaying_lr:
+            if config.shared_repr:
+                self.lr_scheduler.step()
+            else:
+                self.lr_scheduler_policy.step()
+                self.lr_scheduler_value.step()
+
+    def eval_step(self, state):
+        prediction = self.network(self.config.state_normalizer(state))
+        action = to_np(prediction['action'])
+        if isinstance(self.task.action_space, Box):
+            action = np.clip(action, self.task.action_space.low, self.task.action_space.high)
+        return action
+
+    def sa_loss(self,states,actions):
+        eps = self.noise.bound
+        adv_states = get_state_kl_bound_sgld(self.sgld_network,states,actions,eps,10,0)
+        self.config.state_normalizer.set_read_only()
+        target = self.network.actor(self.config.state_normalizer(adv_states))
+        self.config.state_normalizer.unset_read_only()
+        loss = torch.nn.KLDivLoss()
+        return loss(target,actions.detach())
+
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/agent/A2C_test_robustness.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+from ..network import *
+from ..component import *
+from .BaseAgent import *
+import collections
+from gym.spaces.box import Box
+
+
+class A2CAgent_test(BaseAgent):
+    def __init__(self, config, noise=None):
+        BaseAgent.__init__(self, config, noise=noise)
+        self.lexico = config.lexico
+        if self.lexico:
+            # Lexicographic Robustness
+            self.i = None
+            self.mu = [0.0 for _ in range(1)]
+            self.j = [0.0 for _ in range(1)]
+            self.recent_losses = [collections.deque(maxlen=25) for i in range(2)]
+            self.beta = list(reversed(range(1, 3)))
+            self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
+            self.second_order = False
+            self.tau = 0 #.2
+        self.config = config
+        self.task = config.task_fn()
+        self.network = config.network_fn()
+        self.optimizer = config.optimizer_fn(self.network.parameters())
+        self.total_steps = 0
+        self.states = self.task.reset()
+
+    def step(self):
+        config = self.config
+        storage = Storage(config.rollout_length)
+        states = self.states
+        for _ in range(config.rollout_length):
+            prediction = self.network(config.state_normalizer(states))
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['action']))
+            self.record_online_return(info)
+            rewards = config.reward_normalizer(rewards)
+            storage.feed(prediction)
+            storage.feed({'state': tensor(states)})
+            storage.feed({'reward': tensor(rewards).unsqueeze(-1),
+                         'mask': tensor(1 - terminals).unsqueeze(-1)})
+
+            states = next_states
+            self.total_steps += config.num_workers
+
+        self.states = states
+        storage.feed({'state': states})
+        prediction = self.network(config.state_normalizer(states))
+        storage.feed(prediction)
+        storage.placeholder()
+        entries = storage.extract(['pi', 'state'])
+        if self.lexico:
+            weights = self.compute_weights()
+            print(weights)
+            robust_loss = self.robust_loss(entries.state,entries.pi)
+            print(robust_loss)
+            self.recent_losses[0].append(0)
+            self.recent_losses[1].append(-robust_loss)
+            self.optimizer.zero_grad()
+            (robust_loss).backward()
+            nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+            self.optimizer.step()
+            # self.update_lagrange()
+        else:
+            self.optimizer.zero_grad()
+            (policy_loss - config.entropy_weight * entropy_loss +
+             config.value_loss_weight * value_loss).backward()
+            nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+            self.optimizer.step()
+
+    def eval_step(self, state):
+        prediction = self.network(self.config.state_normalizer(state))
+        action = to_np(prediction['action'])
+        if isinstance(self.task.action_space, Box):
+            action = np.clip(action, self.task.action_space.low, self.task.action_space.high)
+        return action
+
+    def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
+        # If not enough updates have been performed, assume not converged
+        if len(self.recent_losses[self.i]) < minimum_updates:
+            return False
+        else:
+            l_mean = torch.tensor(self.recent_losses[self.i]).mean().float()
+            # If the mean loss is lower than some absolute bound, assume converged
+            if l_mean < bound:
+                return True
+            # Else check if the max of the recent losses are sufficiently close to the mean, if so then assume converged
+            else:
+                l_max = max(self.recent_losses[self.i]).float()
+                if l_max > (1.0 + tolerance) * l_mean:
+                    return False
+
+        return True
+
+    def update_lagrange(self):
+        # Save relevant loss information for updating Lagrange parameters
+        for i in range(1):
+            self.j[i] = torch.tensor(self.recent_losses[i]).mean()
+            # if self.second_order:
+            #     self.grad_j[i] = -torch.stack(tuple(self.recent_grads[i]), dim=0).mean(dim=0)
+        # Update Lagrange parameters, mu==lambda
+        for i in range(1):
+            self.mu[i] += self.eta[i] * (self.j[i] - self.tau - self.recent_losses[i][-1])
+            self.mu[i] = max(self.mu[i], 0.0)
+            # self.tau *= 0.999
+            # if self.second_order:
+            #     self.lamb[i].train()
+            #     loss = self.lamb[i](torch.unsqueeze(self.grad_j[i] - self.recent_grads[i][-1], 0).to(device)).to(device)
+            #     self.lagrange_optimizer[i].zero_grad()
+            #     loss.backward()
+            #     self.lagrange_optimizer[i].step()
+            #     self.lamb[i].eval()
+
+    def compute_weights(self):
+        reward_range = 2
+        # Compute weights for different components of the first order objective terms
+        first_order = []
+        for i in range(reward_range - 1):
+            w = self.beta[i] + self.mu[i] * sum([self.beta[j] for j in range(i + 1, reward_range)])
+            first_order.append(w)
+        first_order.append(self.beta[reward_range - 1])
+        first_order_weights = torch.tensor(first_order)
+
+        # If needed, compute the weights for the second order objective terms as well
+        # if self.second_order:
+        #     if self.i != None:
+        #         second_order = [self.beta[self.i] for _ in range(reward_range - 1)]
+        #     else:
+        #         second_order = [sum([self.beta[j] for j in range(i + 1, reward_range)]) for i in
+        #                         range(reward_range - 1)]
+        #         second_order.append(self.beta[reward_range - 1])
+        #     second_order_weights = torch.tensor(second_order)
+        return first_order_weights
+
+    def robust_loss(self,states,actions):
+        target = []
+        self.config.state_normalizer.set_read_only()
+        for s in states:
+            disturbed = self.noise.nu(to_np(s.unsqueeze(0)))
+            target.append(self.network.action_probs(self.config.state_normalizer(disturbed)))
+        self.config.state_normalizer.unset_read_only()
+        target = torch.cat(target)
+        loss = 0.5 * (actions.detach()-target).pow(2).mean()
+        return torch.clip(loss,-0.01,0.01)
+
+
+--------------------------------------------------------------------------------
+
+File: deep_rl/agent/A2C_agent.py
+#######################################################################
+# Copyright (C) 2017 Shangtong Zhang(zhangshangtong.cpp@gmail.com)    #
+# Permission given to modify the code as long as you keep this        #
+# declaration at the top                                              #
+#######################################################################
+
+from ..network import *
+from ..component import *
+from .BaseAgent import *
+import collections
+from gym.spaces.box import Box
+
+
+class A2CAgent(BaseAgent):
+    def __init__(self, config, noise=None):
+        BaseAgent.__init__(self, config, noise=noise)
+        self.lexico = config.lexico
+        if self.lexico:
+            # Lexicographic Robustness
+            self.i = None
+            self.mu = [0.0 for _ in range(1)]
+            self.j = [0.0 for _ in range(1)]
+            self.recent_losses = [collections.deque(maxlen=25) for i in range(2)]
+            self.beta = list(reversed(range(1, 3)))
+            self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
+            self.second_order = False
+            self.tau = 0.01
+        self.config = config
+        self.task = config.task_fn()
+        self.network = config.network_fn()
+        self.optimizer = config.optimizer_fn(self.network.parameters())
+        self.total_steps = 0
+        self.states = self.task.reset()
+
+    def step(self):
+        config = self.config
+        storage = Storage(config.rollout_length)
+        states = self.states
+        for _ in range(config.rollout_length):
+            prediction = self.network(config.state_normalizer(states))
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['action']))
+            self.record_online_return(info)
+            rewards = config.reward_normalizer(rewards)
+            storage.feed(prediction)
+            storage.feed({'state': tensor(states)})
+            storage.feed({'reward': tensor(rewards).unsqueeze(-1),
+                         'mask': tensor(1 - terminals).unsqueeze(-1)})
+            states = next_states
+            self.total_steps += config.num_workers
+
+        self.states = states
+        storage.feed({'state': states})
+        prediction = self.network(config.state_normalizer(states))
+        storage.feed(prediction)
+        storage.placeholder()
+
+        advantages = tensor(np.zeros((config.num_workers, 1)))
+        returns = prediction['v'].detach()
+        for i in reversed(range(config.rollout_length)):
+            returns = storage.reward[i] + config.discount * storage.mask[i] * returns
+            if not config.use_gae:
+                advantages = returns - storage.v[i].detach()
+            else:
+                td_error = storage.reward[i] + config.discount * storage.mask[i] * storage.v[i + 1] - storage.v[i]
+                advantages = advantages * config.gae_tau * config.discount * storage.mask[i] + td_error
+            storage.advantage[i] = advantages.detach()
+            storage.ret[i] = returns.detach()
+        entries = storage.extract(['log_pi_a', 'v', 'ret', 'advantage', 'entropy', 'pi', 'state'])
+        policy_loss = -(entries.log_pi_a * entries.advantage).mean()
+        value_loss = 0.5 * (entries.ret - entries.v).pow(2).mean()
+        entropy_loss = entries.entropy.mean()
+        if self.lexico:
+            weights = self.compute_weights()
+            if self.total_steps>self.config.max_steps/3:
+                robust_loss = self.robust_loss(entries.state,entries.pi)
+                self.update_lagrange()
+            else:
+                robust_loss = tensor(0)
+            self.recent_losses[0].append(-policy_loss)
+            self.recent_losses[1].append(-robust_loss)
+            self.optimizer.zero_grad()
+            (policy_loss + robust_loss*weights[1]/weights[0] - config.entropy_weight * entropy_loss +
+             config.value_loss_weight * value_loss).backward()
+            nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+            self.optimizer.step()
+        else:
+            self.optimizer.zero_grad()
+            (policy_loss - config.entropy_weight * entropy_loss +
+             config.value_loss_weight * value_loss).backward()
+            nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+            self.optimizer.step()
+
+    def eval_step(self, state):
+        self.config.state_normalizer.set_read_only()
+        prediction = self.network(self.config.state_normalizer(state))
+        action = to_np(prediction['action'])
+        self.config.state_normalizer.unset_read_only()
+        if isinstance(self.task.action_space, Box):
+            action = np.clip(action, self.task.action_space.low, self.task.action_space.high)
+        return action
+
+    def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
+        # If not enough updates have been performed, assume not converged
+        if len(self.recent_losses[self.i]) < minimum_updates:
+            return False
+        else:
+            l_mean = torch.tensor(self.recent_losses[self.i]).mean().float()
+            # If the mean loss is lower than some absolute bound, assume converged
+            if l_mean < bound:
+                return True
+            # Else check if the max of the recent losses are sufficiently close to the mean, if so then assume converged
+            else:
+                l_max = max(self.recent_losses[self.i]).float()
+                if l_max > (1.0 + tolerance) * l_mean:
+                    return False
+
+        return True
+
+    def update_lagrange(self):
+        # Save relevant loss information for updating Lagrange parameters
+        for i in range(1):
+            self.j[i] = torch.tensor(self.recent_losses[i]).mean()
+        # Update Lagrange parameters, mu==lambda
+        for i in range(1):
+            self.mu[i] += self.eta[i] * (self.j[i] - self.tau*self.j[i] - self.recent_losses[i][-1])
+            self.mu[i] = max(self.mu[i], 0.0)
+
+    def compute_weights(self):
+        reward_range = 2
+        # Compute weights for different components of the first order objective terms
+        first_order = []
+        for i in range(reward_range - 1):
+            w = self.beta[i] + self.mu[i] * sum([self.beta[j] for j in range(i + 1, reward_range)])
+            first_order.append(w)
+        first_order.append(self.beta[reward_range - 1])
+        first_order_weights = torch.tensor(first_order)
+        return first_order_weights
+
+    def robust_loss(self,states,actions):
+        self.config.state_normalizer.set_read_only()
+        disturbed = self.noise.nu(states)
+        target = self.network.actor(self.config.state_normalizer(disturbed))
+        self.config.state_normalizer.unset_read_only()
+        loss = 0.5 * (actions.detach()-target).pow(2).mean()
+        return torch.clip(loss,-0.2,0.2)
+#
+#
+class QA2CAgent(BaseAgent):
+    def __init__(self, config, noise=None):
+        BaseAgent.__init__(self, config, noise=noise)
+        self.lexico = config.lexico
+        if self.lexico:
+            # Lexicographic Robustness
+            self.i = None
+            self.mu = [0.0 for _ in range(1)]
+            self.j = [0.0 for _ in range(1)]
+            self.recent_losses = [collections.deque(maxlen=25) for i in range(2)]
+            self.beta = list(reversed(range(1, 3)))
+            self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
+            self.second_order = False
+            self.tau = 0#.2
+        self.config = config
+        self.task = config.task_fn()
+        self.network = config.network_fn()
+        self.optimizer = config.optimizer_fn(self.network.parameters())
+        self.total_steps = 0
+        self.states = self.task.reset()
+
+    def step(self):
+        config = self.config
+        storage = Storage(config.rollout_length,keys=['pi','q','qa','eq'])
+        states = self.states
+        for _ in range(config.rollout_length):
+            prediction = self.network(config.state_normalizer(states))
+            next_states, rewards, terminals, info = self.task.step(to_np(prediction['action']))
+            self.record_online_return(info)
+            rewards = config.reward_normalizer(rewards)
+            storage.feed(prediction)
+            storage.feed({'state': tensor(states)})
+            storage.feed({'reward': tensor(rewards).unsqueeze(-1),
+                         'mask': tensor(1 - terminals).unsqueeze(-1)})
+            states = next_states
+            self.total_steps += config.num_workers
+
+        self.states = states
+        storage.feed({'state': states})
+        prediction = self.network(config.state_normalizer(states))
+        storage.feed(prediction)
+        storage.placeholder()
+
+        advantages = tensor(np.zeros((config.num_workers, 1)))
+        returns = prediction['eq'].detach()
+        for i in reversed(range(config.rollout_length)):
+            returns = storage.reward[i] + config.discount * storage.mask[i] * returns
+            if not config.use_gae:
+                advantages = returns - storage.v[i].detach()
+            else:
+                td_error = storage.reward[i] + config.discount * storage.mask[i] * storage.eq[i + 1] - storage.eq[i]
+                advantages = advantages * config.gae_tau * config.discount * storage.mask[i] + td_error
+            storage.advantage[i] = advantages.detach()
+            storage.ret[i] = returns.detach()
+        entries = storage.extract(['log_pi_a', 'eq', 'ret', 'advantage', 'entropy', 'pi', 'state','qa','q'])
+        policy_loss = -(entries.log_pi_a * entries.advantage).mean()
+        value_loss = 0.5 * (entries.ret - entries.qa).pow(2).mean()
+        entropy_loss = entries.entropy.mean()
+        if self.lexico:
+            weights = self.compute_weights()
+            if self.total_steps > self.config.max_steps/3:
+                # robust_loss = self.robust_Q_loss(entries.state,entries.q.detach(),entries.qa.detach(),entries.log_pi_a)
+                robust_loss = self.robust_Q_loss(entries.state, entries.q.detach(), entries.ret,
+                                                 entries.log_pi_a)
+                # robust_loss = self.robust_loss(entries.state,entries.pi)
+                self.update_lagrange()
+            else:
+                robust_loss = tensor(0)
+            self.recent_losses[0].append(-policy_loss)
+            self.recent_losses[1].append(robust_loss)
+            self.optimizer.zero_grad()
+            (policy_loss + robust_loss*weights[1]/weights[0] - config.entropy_weight * entropy_loss +
+             config.value_loss_weight * value_loss).backward()
+            nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+            self.optimizer.step()
+        else:
+            self.optimizer.zero_grad()
+            (policy_loss - config.entropy_weight * entropy_loss +
+             config.value_loss_weight * value_loss).backward()
+            nn.utils.clip_grad_norm_(self.network.parameters(), config.gradient_clip)
+            self.optimizer.step()
+
+    def eval_step(self, state):
+        self.config.state_normalizer.set_read_only()
+        prediction = self.network(self.config.state_normalizer(state))
+        action = to_np(prediction['action'])
+        self.config.state_normalizer.unset_read_only()
+        if isinstance(self.task.action_space, Box):
+            action = np.clip(action, self.task.action_space.low, self.task.action_space.high)
+        return action
+
+    def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
+        # If not enough updates have been performed, assume not converged
+        if len(self.recent_losses[self.i]) < minimum_updates:
+            return False
+        else:
+            l_mean = torch.tensor(self.recent_losses[self.i]).mean().float()
+            # If the mean loss is lower than some absolute bound, assume converged
+            if l_mean < bound:
+                return True
+            # Else check if the max of the recent losses are sufficiently close to the mean, if so then assume converged
+            else:
+                l_max = max(self.recent_losses[self.i]).float()
+                if l_max > (1.0 + tolerance) * l_mean:
+                    return False
+        return True
+
+    def update_lagrange(self):
+        # Save relevant loss information for updating Lagrange parameters
+        for i in range(1):
+            self.j[i] = -torch.tensor(self.recent_losses[i]).mean()
+        # Update Lagrange parameters, mu==lambda
+        for i in range(1):
+            self.mu[i] += self.eta[i] * (self.j[i] - self.tau*self.j[i] - self.recent_losses[i][-1])
+            self.mu[i] = max(self.mu[i], 0.0)
+            # self.tau *= 0.999
+
+    def compute_weights(self):
+        reward_range = 2
+        # Compute weights for different components of the first order objective terms
+        first_order = []
+        for i in range(reward_range - 1):
+            w = self.beta[i] + self.mu[i] * sum([self.beta[j] for j in range(i + 1, reward_range)])
+            first_order.append(w)
+        first_order.append(self.beta[reward_range - 1])
+        first_order_weights = torch.tensor(first_order)
+        return first_order_weights
+
+    def robust_Q_loss(self, states, q, qa, log_a):
+        self.config.state_normalizer.set_read_only()
+        disturbed = self.noise.nu(states)
+        self.config.state_normalizer.unset_read_only()
+        feats = self.network.feature(disturbed)
+        probs = self.network.actor_phi(feats)
+        q_pi_nu = torch.sum(probs["pi"] * q, dim=1).unsqueeze(-1)
+        loss = (-qa+q_pi_nu).pow(2).mean()
+        return torch.clip(loss, -0.2, 0.2)
+
+    def robust_loss(self, states, actions):
+        self.config.state_normalizer.set_read_only()
+        disturbed = self.noise.nu(states)
+        target = self.network.actor(self.config.state_normalizer(disturbed))
+        self.config.state_normalizer.unset_read_only()
+        loss = 0.5 * (actions.detach() - target).pow(2).mean()
+        return torch.clip(loss, -0.2, 0.2)
+
+--------------------------------------------------------------------------------
+
