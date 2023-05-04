@@ -27,12 +27,17 @@ class RobustAgent:
         self.entropy_weight = 0  # 0.01
         self.value_loss_weight = 1
         self.gradient_clip = 0.5
+        self.eval_episodes = 10
 
         self.network = CategoricalActorCriticNet(
             env.state_count,
             env.action_count,
         )
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=0.001, eps=1e-8)
+        self.total_steps = 0
+        self.state = self.env.sample_state()
+
+    def reset(self):
         self.total_steps = 0
         self.state = self.env.sample_state()
 
@@ -94,7 +99,7 @@ class RobustAgent:
         if self.total_steps > self.max_steps / 3:
             robust_loss = self.robust_loss(entries.state, entries.theta, entries.pi)
             self.update_lagrange()
-            print(robust_loss)
+            # print(robust_loss)
         else:
             robust_loss = tensor(0)
         self.recent_losses[0].append(-policy_loss)
@@ -110,10 +115,41 @@ class RobustAgent:
         self.optimizer.step()
         # print("Actual Reward", storage.reward_A)
 
-    def eval_step(self, state):
-        prediction = self.network(state)
+    def eval_step(self, obs):
+        prediction = self.network(obs)
         action = to_np(prediction["action"])
         return action
+
+    def eval_noisy_episode(self):
+        self.reset()
+        state = self.state
+        total_reward_A = 0
+        total_reward_P = 0
+        while self.total_steps < self.max_steps:
+            # print(self.total_steps)
+            theta = self.env.sample_theta(state)
+            theta_disturbed = uniform_kernel(self.env.theta_count)
+            obs = torch.cat((state, theta_disturbed), 0)
+            action = self.eval_step(obs)
+            total_reward_A += self.env.R_A[state, action, theta]
+            total_reward_P += self.env.R_P[state, action, theta]
+
+            state = self.env.take_action(state, action)
+            self.total_steps += 1
+
+        return total_reward_A, total_reward_P
+
+    def eval_noisy_episodes(self):
+        episodic_rewards_A = []
+        episodic_rewards_P = []
+        for ep in range(self.eval_episodes):
+            # print("Ep: ", ep)
+            total_rewards_A, total_rewards_P = self.eval_noisy_episode()
+            episodic_rewards_A.append(np.sum(total_rewards_A))
+            episodic_rewards_P.append(np.sum(total_rewards_P))
+
+        return np.mean(episodic_rewards_A), np.mean(episodic_rewards_P)
+
 
     def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
         # If not enough updates have been performed, assume not converged
@@ -167,5 +203,6 @@ class RobustAgent:
             actions.shape[0] // self.env.action_count, self.env.action_count
         )
         target = self.network.actor(obs_disturbed)
+        print(actions.size(), target.size())
         loss = 0.5 * (actions.detach() - target).pow(2).mean()
         return torch.clip(loss, -0.2, 0.2)
