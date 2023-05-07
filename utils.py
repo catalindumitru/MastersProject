@@ -10,6 +10,16 @@ def random_distribution(n):
     return d
 
 
+def random_sample(indices, batch_size):
+    indices = np.asarray(np.random.permutation(indices))
+    batches = indices[: len(indices) // batch_size * batch_size].reshape(-1, batch_size)
+    for batch in batches:
+        yield batch
+    r = len(indices) % batch_size
+    if r:
+        yield indices[-r:]
+
+
 def tensor(x):
     if isinstance(x, Tensor):
         return x

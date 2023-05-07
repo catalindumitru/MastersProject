@@ -7,13 +7,13 @@ from torch.distributions import Categorical
 class Environment:
     def __init__(
         self,
-        state_count=1000,
-        action_count=10,
-        theta_count=10,
+        state_count=50,
+        action_count=25,
+        theta_count=25,
         gamma_A=0.8,
         gamma_P=0.8,
         terminal_states=0,
-        beta=0,  # maybe remove?
+        beta=0,
         lb_P=0,
         ub_P=1,
         lb_A=0,

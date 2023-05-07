@@ -43,7 +43,7 @@ class CategoricalActorCriticNet(nn.Module):
         v = self.fc_critic(phi_v)
         dist = Categorical(logits=logits)
         if action is None:
-            action = dist.sample()
+            action = dist.sample().unsqueeze(0)
         log_prob = dist.log_prob(action).unsqueeze(-1)
         entropy = dist.entropy().unsqueeze(-1)
         return {

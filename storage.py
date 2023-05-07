@@ -2,7 +2,7 @@ from collections import namedtuple
 import torch
 
 
-class   Storage:
+class Storage:
     def __init__(self, memory_size, keys=None):
         if keys is None:
             keys = []
@@ -48,6 +48,8 @@ class   Storage:
         self._size = 0
 
     def extract(self, keys):
+        # if "state" in keys:
+        #     print(torch.cat(getattr(self, "state"), dim=0))
         data = [getattr(self, k)[: self.memory_size] for k in keys]
         data = map(lambda x: torch.cat(x, dim=0), data)
         Entry = namedtuple("Entry", keys)
