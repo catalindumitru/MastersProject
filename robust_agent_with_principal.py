@@ -19,10 +19,10 @@ class RobustAgentWithPrincipal:
         self.env = env
         self.principal_policy = principal_policy
         self.principal_policy_train = self.get_principal_policy_noisy(
-            principal_policy, 0
+            principal_policy, 0.1
         )
         self.principal_policy_eval = self.get_principal_policy_noisy(
-            principal_policy, 0
+            principal_policy, 0.2
         )
 
         # Lexicographic Robustness
@@ -73,7 +73,7 @@ class RobustAgentWithPrincipal:
         state = self.state
         theta = self.env.sample_theta(state)
         for _ in range(self.rollout_length):
-            obs = torch.cat((state, theta), 0)
+            obs = torch.stack((state, theta))
             prediction = self.network(obs)
             action = prediction["action"]
             # print("ACtion", action)
@@ -84,8 +84,8 @@ class RobustAgentWithPrincipal:
             # print(self.env.R_A[state, :, theta])
 
             storage.feed(prediction)
-            storage.feed({"state": tensor(state)})
-            storage.feed({"theta": tensor(theta)})
+            storage.feed({"state": state})
+            storage.feed({"theta": theta})
             storage.feed(
                 {
                     "reward_A": tensor(reward_A).unsqueeze(-1),
@@ -99,7 +99,7 @@ class RobustAgentWithPrincipal:
         self.state = state
         storage.feed({"state": state})
         storage.feed({"theta": theta})
-        obs = torch.cat((state, theta), 0)
+        obs = torch.stack((state, theta))
         prediction = self.network(obs)
         storage.feed(prediction)
         storage.placeholder()
@@ -149,7 +149,7 @@ class RobustAgentWithPrincipal:
 
     def eval_step(self, obs):
         prediction = self.network(obs)
-        action = to_np(prediction["action"]).squeeze()
+        action = to_np(prediction["action"])
         return action
 
     def eval_noisy_episode(self):
@@ -165,7 +165,7 @@ class RobustAgentWithPrincipal:
             theta_disturbed = kernel_with_principal(
                 state, theta, self.env, self.principal_policy_eval
             )
-            obs = torch.cat((state, theta_disturbed), 0)
+            obs = torch.stack((state, theta_disturbed))
             action = self.eval_step(obs)
             total_reward_A += discount_A * self.env.R_A[state, action, theta]
             total_reward_P += discount_P * self.env.R_P[state, action, theta]
@@ -239,8 +239,11 @@ class RobustAgentWithPrincipal:
             )
             for state, theta in zip(states, thetas)
         ]
-        obs_disturbed = tensor(
-            [[state, theta] for state, theta in zip(states, theta_disturbed)]
+        obs_disturbed = torch.stack(
+            [
+                torch.stack((state, theta))
+                for state, theta in zip(states, theta_disturbed)
+            ]
         )
         # print(states, thetas, actions)
         # actions = actions.view(

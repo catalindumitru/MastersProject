@@ -49,7 +49,7 @@ class RobustAgent:
         state = self.state
         theta = self.env.sample_theta(state)
         for _ in range(self.rollout_length):
-            obs = torch.cat((state, theta), 0)
+            obs = torch.stack((state, theta))
             prediction = self.network(obs)
             action = prediction["action"]
             # print("ACtion", action)
@@ -60,8 +60,8 @@ class RobustAgent:
             # print(self.env.R_A[state, :, theta])
 
             storage.feed(prediction)
-            storage.feed({"state": tensor(state)})
-            storage.feed({"theta": tensor(theta)})
+            storage.feed({"state": state})
+            storage.feed({"theta": theta})
             storage.feed(
                 {
                     "reward_A": tensor(reward_A).unsqueeze(-1),
@@ -75,7 +75,7 @@ class RobustAgent:
         self.state = state
         storage.feed({"state": state})
         storage.feed({"theta": theta})
-        obs = torch.cat((state, theta), 0)
+        obs = torch.stack((state, theta))
         prediction = self.network(obs)
         storage.feed(prediction)
         storage.placeholder()
@@ -125,7 +125,7 @@ class RobustAgent:
 
     def eval_step(self, obs):
         prediction = self.network(obs)
-        action = to_np(prediction["action"]).squeeze()
+        action = to_np(prediction["action"])
         return action
 
     def eval_noisy_episode(self):
@@ -139,7 +139,7 @@ class RobustAgent:
             theta = self.env.sample_theta(state)
             # theta_disturbed = uniform_kernel(self.env.theta_count)
             theta_disturbed = kernel_without_principal(state, self.env.mu)
-            obs = torch.cat((state, theta_disturbed), 0)
+            obs = torch.stack((state, theta_disturbed))
             action = self.eval_step(obs)
             total_reward_A += discount_A * self.env.R_A[state, action, theta]
             total_reward_P += discount_P * self.env.R_P[state, action, theta]
@@ -208,13 +208,17 @@ class RobustAgent:
         theta_disturbed = [
             tensor(kernel_without_principal(state, self.env.mu)) for state in states
         ]
-        obs_disturbed = tensor(
-            [[state, theta] for state, theta in zip(states, theta_disturbed)]
+        obs_disturbed = torch.stack(
+            [
+                torch.stack((state, theta))
+                for state, theta in zip(states, theta_disturbed)
+            ]
         )
         # print(states, thetas, actions)
         # actions = actions.view(
         #     actions.shape[0] // self.env.action_count, self.env.action_count
         # )
         target = self.network.actor(obs_disturbed)
+        assert len(actions) == len(target)
         loss = 0.5 * (actions.detach() - target).pow(2).mean()
         return torch.clip(loss, -0.2, 0.2)

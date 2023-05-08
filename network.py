@@ -15,9 +15,13 @@ class CategoricalActorCriticNet(nn.Module):
     ):
         super(CategoricalActorCriticNet, self).__init__()
 
-        self.phi_body = FCBody(state_count)
-        self.actor_body = DummyBody(self.phi_body.feature_dim)
-        self.critic_body = DummyBody(self.phi_body.feature_dim)
+        # self.phi_body = FCBody(state_count)
+        # self.actor_body = DummyBody(self.phi_body.feature_dim)
+        # self.critic_body = DummyBody(self.phi_body.feature_dim)
+
+        self.phi_body = DummyBody(state_count)
+        self.actor_body = FCBody(self.phi_body.feature_dim)
+        self.critic_body = FCBody(self.phi_body.feature_dim)
 
         self.fc_action = layer_init(
             nn.Linear(self.actor_body.feature_dim, action_count), 1e-3
@@ -43,7 +47,7 @@ class CategoricalActorCriticNet(nn.Module):
         v = self.fc_critic(phi_v)
         dist = Categorical(logits=logits)
         if action is None:
-            action = dist.sample().unsqueeze(0)
+            action = dist.sample()
         log_prob = dist.log_prob(action).unsqueeze(-1)
         entropy = dist.entropy().unsqueeze(-1)
         return {
@@ -72,9 +76,7 @@ class DummyBody(nn.Module):
 
 
 class FCBody(nn.Module):
-    def __init__(
-        self, state_dim, hidden_units=(64, 64), gate=F.relu, noisy_linear=False
-    ):
+    def __init__(self, state_dim, hidden_units=(2, 4), gate=F.relu, noisy_linear=False):
         super(FCBody, self).__init__()
         dims = (2,) + hidden_units
         if noisy_linear:

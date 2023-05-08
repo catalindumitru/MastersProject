@@ -9,24 +9,24 @@ import torch
 if __name__ == "__main__":
     env = Environment()
 
-    agent_bayesian = BayesianAgent(env)
-    agent_bayesian.train_get_policy()
-    print(agent_bayesian.eval_episodes())
-    print(agent_bayesian.eval_episodes_diff_policy("noisy"))
-    print(agent_bayesian.eval_episodes_diff_policy("random"))
-
-    agent = RobustAgentWithPrincipal(env, agent_bayesian.optimal_policy)
-    agent.train()
-    print(agent.eval_noisy_episodes())
-
-    agent = RobustAgentPPOWithPrincipal(env, agent_bayesian.optimal_policy)
-    agent.train()
-    print(agent.eval_noisy_episodes())
+    # agent_bayesian = BayesianAgent(env)
+    # agent_bayesian.train_get_policy()
+    # print(agent_bayesian.eval_episodes())
+    # print(agent_bayesian.eval_episodes_diff_policy("noisy"))
+    # print(agent_bayesian.eval_episodes_diff_policy("random"))
 
     agent = RobustAgent(env)
     agent.train()
     print(agent.eval_noisy_episodes())
 
-    agent = RobustAgentPPO(env)
-    agent.train()
-    print(agent.eval_noisy_episodes())
+    # agent = RobustAgentWithPrincipal(env, agent_bayesian.optimal_policy)
+    # agent.train()
+    # print(agent.eval_noisy_episodes())
+
+    # agent = RobustAgentPPO(env)
+    # agent.train()
+    # print(agent.eval_noisy_episodes())
+
+    # agent = RobustAgentPPOWithPrincipal(env, agent_bayesian.optimal_policy)
+    # agent.train()
+    # print(agent.eval_noisy_episodes())

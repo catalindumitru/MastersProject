@@ -45,9 +45,11 @@ def noisy_distribution(dist, noise_scale):
     noisy_dist /= noisy_dist.sum()
     return noisy_dist
 
+    # Convex hull
+
 
 def uniform_kernel(theta_count):
-    return Categorical(tensor(random_distribution(theta_count))).sample().unsqueeze(0)
+    return Categorical(tensor(random_distribution(theta_count))).sample()
 
 
 def kernel_with_principal(state, theta, env, principal_policy_noisy):
@@ -66,8 +68,8 @@ def kernel_with_principal(state, theta, env, principal_policy_noisy):
             principal_policy_noisy[state, t, principal_action] * env.mu[state, t]
         ) / denominator
 
-    return Categorical(tensor(kernel)).sample().unsqueeze(0)
+    return Categorical(tensor(kernel)).sample()
 
 
 def kernel_without_principal(state, mu):
-    return Categorical(tensor(mu[state])).sample().unsqueeze(0)
+    return Categorical(tensor(mu[state])).sample()
