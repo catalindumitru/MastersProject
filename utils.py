@@ -39,13 +39,10 @@ def layer_init(layer, w_scale=1.0):
     return layer
 
 
-def noisy_distribution(dist, noise_scale):
-    noise = np.random.uniform(0, noise_scale, size=len(dist))
-    noisy_dist = dist + noise
-    noisy_dist /= noisy_dist.sum()
+def noisy_distribution(dist, alpha):
+    noise = random_distribution(len(dist))
+    noisy_dist = alpha * dist + (1 - alpha) * noise
     return noisy_dist
-
-    # Convex hull
 
 
 def uniform_kernel(theta_count):

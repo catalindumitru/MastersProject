@@ -9,9 +9,8 @@ from environment import Environment
 
 
 class RobustAgent:
-    def __init__(self, env: Environment, principal_policy=None):
+    def __init__(self, env: Environment):
         self.env = env
-        self.principal_policy = principal_policy
 
         # Lexicographic Robustness
         self.i = None
@@ -38,11 +37,11 @@ class RobustAgent:
         )
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=0.001, eps=1e-8)
         self.total_steps = 0
-        self.state = self.env.sample_state()
+        self.state = tensor(self.env.S[0]).to(torch.int)
 
     def reset(self):
         self.total_steps = 0
-        self.state = self.env.sample_state()
+        self.state = tensor(self.env.S[0]).to(torch.int)
 
     def step(self):
         storage = Storage(self.rollout_length)
@@ -160,7 +159,7 @@ class RobustAgent:
             episodic_rewards_A.append(np.sum(total_rewards_A))
             episodic_rewards_P.append(np.sum(total_rewards_P))
 
-        return np.mean(episodic_rewards_A), np.mean(episodic_rewards_P)
+        return np.mean(episodic_rewards_A)  # , np.mean(episodic_rewards_P)
 
     def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
         # If not enough updates have been performed, assume not converged

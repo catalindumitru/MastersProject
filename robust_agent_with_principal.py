@@ -19,10 +19,7 @@ class RobustAgentWithPrincipal:
         self.env = env
         self.principal_policy = principal_policy
         self.principal_policy_train = self.get_principal_policy_noisy(
-            principal_policy, 0.1
-        )
-        self.principal_policy_eval = self.get_principal_policy_noisy(
-            principal_policy, 0.2
+            principal_policy, 0.8
         )
 
         # Lexicographic Robustness
@@ -50,23 +47,23 @@ class RobustAgentWithPrincipal:
         )
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=0.001, eps=1e-8)
         self.total_steps = 0
-        self.state = self.env.sample_state()
+        self.state = tensor(self.env.S[0]).to(torch.int)
 
-    def get_principal_policy_noisy(self, principal_policy, noise_scale):
+    def get_principal_policy_noisy(self, principal_policy, alpha):
         noisy_principal_policy = np.zeros(
             (self.env.state_count, self.env.theta_count, self.env.action_count)
         )
         for s in self.env.S:
             for t in self.env.Theta:
                 noisy_principal_policy[s, t] = noisy_distribution(
-                    principal_policy[s, t], noise_scale
+                    principal_policy[s, t], alpha
                 )
 
         return noisy_principal_policy
 
     def reset(self):
         self.total_steps = 0
-        self.state = self.env.sample_state()
+        self.state = tensor(self.env.S[0]).to(torch.int)
 
     def step(self):
         storage = Storage(self.rollout_length)
@@ -152,7 +149,7 @@ class RobustAgentWithPrincipal:
         action = to_np(prediction["action"])
         return action
 
-    def eval_noisy_episode(self):
+    def eval_noisy_episode(self, principal_policy_eval):
         self.reset()
         state = self.state
         total_reward_A = 0
@@ -163,7 +160,7 @@ class RobustAgentWithPrincipal:
             theta = self.env.sample_theta(state)
             # theta_disturbed = uniform_kernel(self.env.theta_count)
             theta_disturbed = kernel_with_principal(
-                state, theta, self.env, self.principal_policy_eval
+                state, theta, self.env, principal_policy_eval
             )
             obs = torch.stack((state, theta_disturbed))
             action = self.eval_step(obs)
@@ -177,16 +174,18 @@ class RobustAgentWithPrincipal:
 
         return total_reward_A, total_reward_P
 
-    def eval_noisy_episodes(self):
+    def eval_noisy_episodes(self, principal_policy_eval):
         episodic_rewards_A = []
         episodic_rewards_P = []
         for ep in range(self.episode_count):
             # print("Ep: ", ep)
-            total_rewards_A, total_rewards_P = self.eval_noisy_episode()
+            total_rewards_A, total_rewards_P = self.eval_noisy_episode(
+                principal_policy_eval
+            )
             episodic_rewards_A.append(np.sum(total_rewards_A))
             episodic_rewards_P.append(np.sum(total_rewards_P))
 
-        return np.mean(episodic_rewards_A), np.mean(episodic_rewards_P)
+        return np.mean(episodic_rewards_A)  # , np.mean(episodic_rewards_P)
 
     def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
         # If not enough updates have been performed, assume not converged
@@ -245,10 +244,6 @@ class RobustAgentWithPrincipal:
                 for state, theta in zip(states, theta_disturbed)
             ]
         )
-        # print(states, thetas, actions)
-        # actions = actions.view(
-        #     actions.shape[0] // self.env.action_count, self.env.action_count
-        # )
         target = self.network.actor(obs_disturbed)
         loss = 0.5 * (actions.detach() - target).pow(2).mean()
         return torch.clip(loss, -0.2, 0.2)
