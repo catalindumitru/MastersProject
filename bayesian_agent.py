@@ -3,7 +3,7 @@ import gurobipy as gp
 from gurobipy import GRB
 from environment import Environment
 from torch.distributions import Categorical
-from utils import tensor, random_distribution
+from utils import tensor, random_distribution, noisy_distribution
 
 
 class BayesianAgent:
@@ -15,6 +15,7 @@ class BayesianAgent:
 
         self.total_steps = 0
         self.state = self.env.sample_state()
+        self.optimal_policy = None
 
     def reset(self):
         self.total_steps = 0
@@ -115,6 +116,7 @@ class BayesianAgent:
                     pi_P[s, theta, a] = pi[theta, a].X if pi[theta, a].X >= 0 else 0
 
         self.pi_P = pi_P
+        self.optimal_policy = pi_P
 
     def train(self):
         state_count = self.env.state_count
@@ -213,14 +215,17 @@ class BayesianAgent:
         state = self.state
         total_reward_A = 0
         total_reward_P = 0
+        discount_A = discount_P = 1
         while self.total_steps < self.max_steps:
             # print(self.total_steps)
             theta = self.env.sample_theta(state)
             signaled_action = Categorical(tensor(self.pi_P[state, theta, :])).sample()
-            total_reward_A += self.env.R_A[state, signaled_action, theta]
-            total_reward_P += self.env.R_P[state, signaled_action, theta]
+            total_reward_A += discount_A * self.env.R_A[state, signaled_action, theta]
+            total_reward_P += discount_P * self.env.R_P[state, signaled_action, theta]
 
             state = self.env.take_action(state, signaled_action)
+            discount_A *= self.env.gamma_A
+            discount_P *= self.env.gamma_P
             self.total_steps += 1
 
         return total_reward_A, total_reward_P
@@ -236,10 +241,14 @@ class BayesianAgent:
 
         return np.mean(episodic_rewards_A), np.mean(episodic_rewards_P)
 
-    def eval_episodes_diff_policy(self):
+    def eval_episodes_diff_policy(self, distr_type):
         for s in self.env.S:
             for theta in self.env.Theta:
-                self.pi_P[s, theta, :] = random_distribution(self.env.action_count)
+                self.pi_P[s, theta, :] = (
+                    noisy_distribution(self.pi_P[s, theta, :], 2)
+                    if distr_type == "noisy"
+                    else random_distribution(self.env.action_count)
+                )
         episodic_rewards_A = []
         episodic_rewards_P = []
         for ep in range(self.episode_count):

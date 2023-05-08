@@ -39,8 +39,34 @@ def layer_init(layer, w_scale=1.0):
     return layer
 
 
+def noisy_distribution(dist, noise_scale):
+    noise = np.random.uniform(0, noise_scale, size=len(dist))
+    noisy_dist = dist + noise
+    noisy_dist /= noisy_dist.sum()
+    return noisy_dist
+
+
 def uniform_kernel(theta_count):
     return Categorical(tensor(random_distribution(theta_count))).sample().unsqueeze(0)
+
+
+def kernel_with_principal(state, theta, env, principal_policy_noisy):
+    principal_action = Categorical(
+        tensor(principal_policy_noisy[state, theta])
+    ).sample()
+
+    kernel = np.zeros((env.theta_count))
+    denominator = 0
+    for t in env.Theta:
+        denominator += (
+            principal_policy_noisy[state, t, principal_action] * env.mu[state, t]
+        )
+    for t in env.Theta:
+        kernel[t] = (
+            principal_policy_noisy[state, t, principal_action] * env.mu[state, t]
+        ) / denominator
+
+    return Categorical(tensor(kernel)).sample().unsqueeze(0)
 
 
 def kernel_without_principal(state, mu):

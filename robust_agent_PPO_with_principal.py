@@ -4,14 +4,27 @@ import numpy as np
 from collections import deque
 from network import CategoricalActorCriticNet
 from storage import Storage
-from utils import to_np, tensor, uniform_kernel, kernel_without_principal
+from utils import (
+    to_np,
+    tensor,
+    uniform_kernel,
+    kernel_with_principal,
+    random_sample,
+    noisy_distribution,
+)
 from environment import Environment
 
 
-class RobustAgent:
-    def __init__(self, env: Environment, principal_policy=None):
+class RobustAgentPPOWithPrincipal:
+    def __init__(self, env: Environment, principal_policy):
         self.env = env
         self.principal_policy = principal_policy
+        self.principal_policy_train = self.get_principal_policy_noisy(
+            principal_policy, 0.1
+        )
+        self.principal_policy_eval = self.get_principal_policy_noisy(
+            principal_policy, 0.2
+        )
 
         # Lexicographic Robustness
         self.i = None
@@ -22,11 +35,14 @@ class RobustAgent:
         self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
         self.second_order = False
         self.tau = 0.01
-        self.rollout_length = 32
+        self.rollout_length = 128
         self.gae_tau = 0.95
-        self.entropy_weight = 0  # 0.01
-        self.value_loss_weight = 1
-        self.gradient_clip = 0.5
+        self.entropy_weight = 0
+        self.value_loss_weight = 0.1
+        self.optimization_epochs = 10
+        self.mini_batch_size = 32
+        self.target_kl = 0.01
+        self.ppo_ratio_clip = 0.2
 
         self.max_steps = 10000
         self.max_eval_steps = 1000
@@ -36,9 +52,34 @@ class RobustAgent:
             env.state_count,
             env.action_count,
         )
-        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=0.001, eps=1e-8)
         self.total_steps = 0
         self.state = self.env.sample_state()
+
+        self.actor_opt = torch.optim.Adam(self.network.actor_params, 3e-4, eps=1e-5)
+        self.critic_opt = torch.optim.Adam(self.network.actor_params, 1.5e-4, eps=1e-5)
+
+        # anneal lr
+        l = lambda f: 1 - f / self.max_steps
+        self.lr_scheduler_policy = torch.optim.lr_scheduler.LambdaLR(
+            self.actor_opt, lr_lambda=l
+        )
+        self.lr_scheduler_value = torch.optim.lr_scheduler.LambdaLR(
+            self.critic_opt, lr_lambda=l
+        )
+
+        self.loss_bound = 0.5  # or 5?
+
+    def get_principal_policy_noisy(self, principal_policy, noise_scale):
+        noisy_principal_policy = np.zeros(
+            (self.env.state_count, self.env.theta_count, self.env.action_count)
+        )
+        for s in self.env.S:
+            for t in self.env.Theta:
+                noisy_principal_policy[s, t] = noisy_distribution(
+                    principal_policy[s, t], noise_scale
+                )
+
+        return noisy_principal_policy
 
     def reset(self):
         self.total_steps = 0
@@ -52,13 +93,11 @@ class RobustAgent:
             obs = torch.cat((state, theta), 0)
             prediction = self.network(obs)
             action = prediction["action"]
-            # print("ACtion", action)
+
             next_state = self.env.take_action(state, action)
             next_theta = self.env.sample_theta(next_state)
             reward_A = self.env.R_A[state, action, theta]
             reward_P = self.env.R_P[state, action, theta]
-            # print(self.env.R_A[state, :, theta])
-
             storage.feed(prediction)
             storage.feed({"state": tensor(state)})
             storage.feed({"theta": tensor(theta)})
@@ -79,7 +118,6 @@ class RobustAgent:
         prediction = self.network(obs)
         storage.feed(prediction)
         storage.placeholder()
-        # print(storage.extract(["pi"])[0].size())
 
         advantages = tensor(np.zeros((1, 1)))
         returns = prediction["v"].detach()
@@ -93,31 +131,74 @@ class RobustAgent:
             storage.ret[i] = returns.detach()
 
         entries = storage.extract(
-            ["log_pi_a", "v", "ret", "advantage", "entropy", "pi", "state", "theta"]
+            [
+                "log_pi_a",
+                "action",
+                "v",
+                "ret",
+                "advantage",
+                "entropy",
+                "pi",
+                "state",
+                "theta",
+            ]
         )
-        policy_loss = -(entries.log_pi_a * entries.advantage).mean()
-        value_loss = 0.5 * (entries.ret - entries.v).pow(2).mean()
-        entropy_loss = entries.entropy.mean()
+        EntryCLS = entries.__class__
+        entries = EntryCLS(*list(map(lambda x: x.detach(), entries)))
+        entries.advantage.copy_(
+            (entries.advantage - entries.advantage.mean()) / entries.advantage.std()
+        )
+        for _ in range(self.optimization_epochs):
+            sampler = random_sample(
+                np.arange(entries.state.size(0)), self.mini_batch_size
+            )
+            for batch_indices in sampler:
+                batch_indices = tensor(batch_indices).long()
+                entry = EntryCLS(*list(map(lambda x: x[batch_indices], entries)))
+                obs = tensor(
+                    [[state, theta] for state, theta in zip(entry.state, entry.theta)]
+                )
+                prediction = self.network(obs, entry.action)
+                ratio = (prediction["log_pi_a"] - entry.log_pi_a).exp()
+                obj = ratio * entry.advantage
+                obj_clipped = (
+                    ratio.clamp(
+                        1.0 - self.ppo_ratio_clip,
+                        1.0 + self.ppo_ratio_clip,
+                    )
+                    * entry.advantage
+                )
+                policy_loss = (
+                    -torch.min(obj, obj_clipped).mean()
+                    - self.entropy_weight * prediction["entropy"].mean()
+                )
 
-        weights = self.compute_weights()
-        if self.total_steps > self.max_steps / 3:
-            robust_loss = self.robust_loss(entries.state, entries.theta, entries.pi)
-            self.update_lagrange()
-            # print(robust_loss)
-        else:
-            robust_loss = tensor(0)
-        self.recent_losses[0].append(-policy_loss)
-        self.recent_losses[1].append(-robust_loss)
-        self.optimizer.zero_grad()
-        (
-            policy_loss
-            + robust_loss * weights[1] / weights[0]
-            - self.entropy_weight * entropy_loss
-            + self.value_loss_weight * value_loss
-        ).backward()
-        nn.utils.clip_grad_norm_(self.network.parameters(), self.gradient_clip)
-        self.optimizer.step()
-        # print("Actual Reward", storage.reward_A)
+                value_loss = 0.5 * (entry.ret - prediction["v"]).pow(2).mean()
+                approx_kl = (entry.log_pi_a - prediction["log_pi_a"]).mean()
+
+                if approx_kl <= 1.5 * self.target_kl:
+                    if self.total_steps > self.max_steps / 3:
+                        weights = self.compute_weights()
+                        robust_loss = self.robust_loss(
+                            entry.state, entry.theta, entry.pi
+                        )
+                        self.recent_losses[0].append(-policy_loss.mean())
+                        self.recent_losses[1].append(robust_loss)
+                        self.actor_opt.zero_grad()
+                        (policy_loss * weights[0] + robust_loss * weights[1]).backward(
+                            retain_graph=True
+                        )
+                        self.actor_opt.step()
+                    else:
+                        self.actor_opt.zero_grad()
+                        policy_loss.backward(retain_graph=True)
+                        self.actor_opt.step()
+                self.critic_opt.zero_grad()
+                value_loss.backward(retain_graph=True)
+                self.critic_opt.step()
+
+        self.lr_scheduler_policy.step()
+        self.lr_scheduler_value.step()
 
     def train(self):
         while self.total_steps < self.max_steps:
@@ -135,10 +216,11 @@ class RobustAgent:
         total_reward_P = 0
         discount_A = discount_P = 1
         while self.total_steps < self.max_eval_steps:
-            # print(self.total_steps)
             theta = self.env.sample_theta(state)
             # theta_disturbed = uniform_kernel(self.env.theta_count)
-            theta_disturbed = kernel_without_principal(state, self.env.mu)
+            theta_disturbed = kernel_with_principal(
+                state, theta, self.env, self.principal_policy_eval
+            )
             obs = torch.cat((state, theta_disturbed), 0)
             action = self.eval_step(obs)
             total_reward_A += discount_A * self.env.R_A[state, action, theta]
@@ -176,19 +258,19 @@ class RobustAgent:
                 l_max = max(self.recent_losses[self.i]).float()
                 if l_max > (1.0 + tolerance) * l_mean:
                     return False
-
         return True
 
     def update_lagrange(self):
         # Save relevant loss information for updating Lagrange parameters
         for i in range(1):
             self.j[i] = torch.tensor(self.recent_losses[i]).mean()
-        # Update Lagrange parameters, mu==lambda
+        # Update Lagrange parameters
         for i in range(1):
             self.mu[i] += self.eta[i] * (
                 self.j[i] - self.tau * self.j[i] - self.recent_losses[i][-1]
             )
             self.mu[i] = max(self.mu[i], 0.0)
+            # self.tau *= 0.999
 
     def compute_weights(self):
         reward_range = 2
@@ -204,17 +286,20 @@ class RobustAgent:
         return first_order_weights
 
     def robust_loss(self, states, thetas, actions):
-        assert len(states) == len(thetas)
         theta_disturbed = [
-            tensor(kernel_without_principal(state, self.env.mu)) for state in states
+            tensor(
+                kernel_with_principal(
+                    state, theta, self.env, self.principal_policy_train
+                )
+            )
+            for state, theta in zip(states, thetas)
         ]
         obs_disturbed = tensor(
             [[state, theta] for state, theta in zip(states, theta_disturbed)]
         )
-        # print(states, thetas, actions)
         # actions = actions.view(
         #     actions.shape[0] // self.env.action_count, self.env.action_count
         # )
         target = self.network.actor(obs_disturbed)
         loss = 0.5 * (actions.detach() - target).pow(2).mean()
-        return torch.clip(loss, -0.2, 0.2)
+        return torch.clip(loss, -self.loss_bound, self.loss_bound)

@@ -21,7 +21,7 @@ class RobustAgentPPO:
         self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
         self.second_order = False
         self.tau = 0.01
-        self.rollout_length = 4
+        self.rollout_length = 128
         self.gae_tau = 0.95
         self.entropy_weight = 0
         self.value_loss_weight = 0.1
@@ -30,8 +30,9 @@ class RobustAgentPPO:
         self.target_kl = 0.01
         self.ppo_ratio_clip = 0.2
 
-        self.max_steps = 500
-        self.episode_count = 10
+        self.max_steps = 10000
+        self.max_eval_steps = 1000
+        self.episode_count = 100
 
         self.network = CategoricalActorCriticNet(
             env.state_count,
@@ -121,7 +122,6 @@ class RobustAgentPPO:
         entries.advantage.copy_(
             (entries.advantage - entries.advantage.mean()) / entries.advantage.std()
         )
-        print(entries.pi)
         for _ in range(self.optimization_epochs):
             sampler = random_sample(
                 np.arange(entries.state.size(0)), self.mini_batch_size
@@ -152,7 +152,6 @@ class RobustAgentPPO:
 
                 if approx_kl <= 1.5 * self.target_kl:
                     if self.total_steps > self.max_steps / 3:
-                        print(entries.pi)
                         weights = self.compute_weights()
                         robust_loss = self.robust_loss(
                             entry.state, entry.theta, entry.pi
@@ -181,7 +180,7 @@ class RobustAgentPPO:
 
     def eval_step(self, obs):
         prediction = self.network(obs)
-        action = to_np(prediction["action"])
+        action = to_np(prediction["action"]).squeeze()
         return action
 
     def eval_noisy_episode(self):
@@ -189,17 +188,19 @@ class RobustAgentPPO:
         state = self.state
         total_reward_A = 0
         total_reward_P = 0
-        while self.total_steps < self.max_steps:
-            # print(self.total_steps)
+        discount_A = discount_P = 1
+        while self.total_steps < self.max_eval_steps:
             theta = self.env.sample_theta(state)
             # theta_disturbed = uniform_kernel(self.env.theta_count)
             theta_disturbed = kernel_without_principal(state, self.env.mu)
             obs = torch.cat((state, theta_disturbed), 0)
             action = self.eval_step(obs)
-            total_reward_A += self.env.R_A[state, action, theta]
-            total_reward_P += self.env.R_P[state, action, theta]
+            total_reward_A += discount_A * self.env.R_A[state, action, theta]
+            total_reward_P += discount_P * self.env.R_P[state, action, theta]
 
             state = self.env.take_action(state, action)
+            discount_A *= self.env.gamma_A
+            discount_P *= self.env.gamma_P
             self.total_steps += 1
 
         return total_reward_A, total_reward_P
@@ -258,15 +259,14 @@ class RobustAgentPPO:
 
     def robust_loss(self, states, thetas, actions):
         theta_disturbed = [
-            tensor(uniform_kernel(self.env.theta_count)) for _ in range(len(thetas))
+            tensor(kernel_without_principal(state, self.env.mu)) for state in states
         ]
         obs_disturbed = tensor(
             [[state, theta] for state, theta in zip(states, theta_disturbed)]
         )
-        # print(states, thetas, actions)
-        actions = actions.view(
-            actions.shape[0] // self.env.action_count, self.env.action_count
-        )
+        # actions = actions.view(
+        #     actions.shape[0] // self.env.action_count, self.env.action_count
+        # )
         target = self.network.actor(obs_disturbed)
         loss = 0.5 * (actions.detach() - target).pow(2).mean()
         return torch.clip(loss, -self.loss_bound, self.loss_bound)

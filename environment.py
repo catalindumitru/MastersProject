@@ -12,7 +12,7 @@ class Environment:
         theta_count=25,
         gamma_A=0.8,
         gamma_P=0.8,
-        terminal_states=0,
+        terminal_states=10,
         beta=0,
         lb_P=0,
         ub_P=1,
@@ -51,7 +51,7 @@ class Environment:
             self.R_P[t, :, :] = 0
             self.R_A[t, :, :] = 0
 
-        self.R_A = (1 - np.abs(beta)) * self.R_A + beta * self.R_P
+        self.R_P = (1 - np.abs(beta)) * self.R_P + beta * self.R_A
 
     def take_action(self, state, action):
         return Categorical(torch.tensor(self.P[state, action, :])).sample().unsqueeze(0)

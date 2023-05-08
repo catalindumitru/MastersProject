@@ -4,14 +4,26 @@ import numpy as np
 from collections import deque
 from network import CategoricalActorCriticNet
 from storage import Storage
-from utils import to_np, tensor, uniform_kernel, kernel_without_principal
+from utils import (
+    to_np,
+    tensor,
+    uniform_kernel,
+    kernel_with_principal,
+    noisy_distribution,
+)
 from environment import Environment
 
 
-class RobustAgent:
-    def __init__(self, env: Environment, principal_policy=None):
+class RobustAgentWithPrincipal:
+    def __init__(self, env: Environment, principal_policy):
         self.env = env
         self.principal_policy = principal_policy
+        self.principal_policy_train = self.get_principal_policy_noisy(
+            principal_policy, 0
+        )
+        self.principal_policy_eval = self.get_principal_policy_noisy(
+            principal_policy, 0
+        )
 
         # Lexicographic Robustness
         self.i = None
@@ -39,6 +51,18 @@ class RobustAgent:
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=0.001, eps=1e-8)
         self.total_steps = 0
         self.state = self.env.sample_state()
+
+    def get_principal_policy_noisy(self, principal_policy, noise_scale):
+        noisy_principal_policy = np.zeros(
+            (self.env.state_count, self.env.theta_count, self.env.action_count)
+        )
+        for s in self.env.S:
+            for t in self.env.Theta:
+                noisy_principal_policy[s, t] = noisy_distribution(
+                    principal_policy[s, t], noise_scale
+                )
+
+        return noisy_principal_policy
 
     def reset(self):
         self.total_steps = 0
@@ -138,7 +162,9 @@ class RobustAgent:
             # print(self.total_steps)
             theta = self.env.sample_theta(state)
             # theta_disturbed = uniform_kernel(self.env.theta_count)
-            theta_disturbed = kernel_without_principal(state, self.env.mu)
+            theta_disturbed = kernel_with_principal(
+                state, theta, self.env, self.principal_policy_eval
+            )
             obs = torch.cat((state, theta_disturbed), 0)
             action = self.eval_step(obs)
             total_reward_A += discount_A * self.env.R_A[state, action, theta]
@@ -206,7 +232,12 @@ class RobustAgent:
     def robust_loss(self, states, thetas, actions):
         assert len(states) == len(thetas)
         theta_disturbed = [
-            tensor(kernel_without_principal(state, self.env.mu)) for state in states
+            tensor(
+                kernel_with_principal(
+                    state, theta, self.env, self.principal_policy_train
+                )
+            )
+            for state, theta in zip(states, thetas)
         ]
         obs_disturbed = tensor(
             [[state, theta] for state, theta in zip(states, theta_disturbed)]
