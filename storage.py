@@ -10,6 +10,7 @@ class Storage:
             "state",
             "action",
             "theta",
+            "signal",
             "reward_A",
             "reward_P",
             "mask",

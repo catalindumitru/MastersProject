@@ -21,12 +21,12 @@ class RobustAgentPPO:
         self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
         self.second_order = False
         self.tau = 0.01
-        self.rollout_length = 128
+        self.rollout_length = 32
         self.gae_tau = 0.95
-        self.entropy_weight = 0
+        self.entropy_weight = 0.01
         self.value_loss_weight = 0.1
         self.optimization_epochs = 10
-        self.mini_batch_size = 32
+        self.mini_batch_size = 8
         self.target_kl = 0.01
         self.ppo_ratio_clip = 0.2
 
@@ -39,7 +39,7 @@ class RobustAgentPPO:
             env.action_count,
         )
         self.total_steps = 0
-        self.state = self.env.sample_state()
+        self.state = tensor(self.env.S[0]).to(torch.int)
 
         self.actor_opt = torch.optim.Adam(self.network.actor_params, 3e-4, eps=1e-5)
         self.critic_opt = torch.optim.Adam(self.network.actor_params, 1.5e-4, eps=1e-5)
@@ -57,14 +57,14 @@ class RobustAgentPPO:
 
     def reset(self):
         self.total_steps = 0
-        self.state = self.env.sample_state()
+        self.state = tensor(self.env.S[0]).to(torch.int)
 
     def step(self):
         storage = Storage(self.rollout_length)
         state = self.state
         theta = self.env.sample_theta(state)
         for _ in range(self.rollout_length):
-            obs = torch.cat((state, theta), 0)
+            obs = torch.stack((state, theta))
             prediction = self.network(obs)
             action = prediction["action"]
 
@@ -88,7 +88,7 @@ class RobustAgentPPO:
         self.state = state
         storage.feed({"state": state})
         storage.feed({"theta": theta})
-        obs = torch.cat((state, theta), 0)
+        obs = torch.stack((state, theta))
         prediction = self.network(obs)
         storage.feed(prediction)
         storage.placeholder()
@@ -129,8 +129,11 @@ class RobustAgentPPO:
             for batch_indices in sampler:
                 batch_indices = tensor(batch_indices).long()
                 entry = EntryCLS(*list(map(lambda x: x[batch_indices], entries)))
-                obs = tensor(
-                    [[state, theta] for state, theta in zip(entry.state, entry.theta)]
+                obs = torch.stack(
+                    [
+                        torch.stack((state, theta))
+                        for state, theta in zip(entry.state, entry.theta)
+                    ]
                 )
                 prediction = self.network(obs, entry.action)
                 ratio = (prediction["log_pi_a"] - entry.log_pi_a).exp()
@@ -180,7 +183,7 @@ class RobustAgentPPO:
 
     def eval_step(self, obs):
         prediction = self.network(obs)
-        action = to_np(prediction["action"]).squeeze()
+        action = to_np(prediction["action"])
         return action
 
     def eval_noisy_episode(self):
@@ -193,7 +196,7 @@ class RobustAgentPPO:
             theta = self.env.sample_theta(state)
             # theta_disturbed = uniform_kernel(self.env.theta_count)
             theta_disturbed = kernel_without_principal(state, self.env.mu)
-            obs = torch.cat((state, theta_disturbed), 0)
+            obs = torch.stack((state, theta_disturbed))
             action = self.eval_step(obs)
             total_reward_A += discount_A * self.env.R_A[state, action, theta]
             total_reward_P += discount_P * self.env.R_P[state, action, theta]
@@ -214,7 +217,7 @@ class RobustAgentPPO:
             episodic_rewards_A.append(np.sum(total_rewards_A))
             episodic_rewards_P.append(np.sum(total_rewards_P))
 
-        return np.mean(episodic_rewards_A), np.mean(episodic_rewards_P)
+        return np.mean(episodic_rewards_A)  # , np.mean(episodic_rewards_P)
 
     def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
         # If not enough updates have been performed, assume not converged
@@ -261,12 +264,13 @@ class RobustAgentPPO:
         theta_disturbed = [
             tensor(kernel_without_principal(state, self.env.mu)) for state in states
         ]
-        obs_disturbed = tensor(
-            [[state, theta] for state, theta in zip(states, theta_disturbed)]
+        obs_disturbed = torch.stack(
+            [
+                torch.stack((state, theta))
+                for state, theta in zip(states, theta_disturbed)
+            ]
         )
-        # actions = actions.view(
-        #     actions.shape[0] // self.env.action_count, self.env.action_count
-        # )
+
         target = self.network.actor(obs_disturbed)
         loss = 0.5 * (actions.detach() - target).pow(2).mean()
         return torch.clip(loss, -self.loss_bound, self.loss_bound)

@@ -19,7 +19,7 @@ class RobustAgentWithPrincipal:
         self.env = env
         self.principal_policy = principal_policy
         self.principal_policy_train = self.get_principal_policy_noisy(
-            principal_policy, 0.8
+            principal_policy, 1.0
         )
 
         # Lexicographic Robustness
@@ -33,7 +33,7 @@ class RobustAgentWithPrincipal:
         self.tau = 0.01
         self.rollout_length = 32
         self.gae_tau = 0.95
-        self.entropy_weight = 0  # 0.01
+        self.entropy_weight = 0.01  # 0.01
         self.value_loss_weight = 1
         self.gradient_clip = 0.5
 

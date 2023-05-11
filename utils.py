@@ -1,5 +1,6 @@
 import numpy as np
 import torch.nn as nn
+import torch
 from torch import Tensor, from_numpy
 from torch.distributions import Categorical
 
@@ -70,3 +71,16 @@ def kernel_with_principal(state, theta, env, principal_policy_noisy):
 
 def kernel_without_principal(state, mu):
     return Categorical(tensor(mu[state])).sample()
+
+
+def sample_signal(principal_policy, state, theta):
+    return Categorical(tensor(principal_policy[state, theta])).sample()
+
+
+noise_min = -3
+noise_max = 3
+
+
+def disturb_signal(signal, alpha):
+    noise = np.random.uniform(low=noise_min, high=noise_max)
+    return tensor(np.clip(signal + alpha * noise, 0, 24)).to(torch.int)

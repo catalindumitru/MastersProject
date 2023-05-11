@@ -45,13 +45,15 @@ class Game:
             principal_policy_noisy
         )
 
-        # agent = RobustAgentPPO(env)
-        # agent.train()
-        # print(agent.eval_noisy_episodes())
+        agent = RobustAgentPPO(env)
+        agent.train()
+        results["robust_PPO"] = agent.eval_noisy_episodes()
 
-        # agent = RobustAgentPPOWithPrincipal(env, agent_bayesian.optimal_policy)
-        # agent.train()
-        # print(agent.eval_noisy_episodes())
+        agent = RobustAgentPPOWithPrincipal(env, principal_policy_optimal)
+        agent.train()
+        results["robust_PPO_with_principal"] = agent.eval_noisy_episodes(
+            principal_policy_noisy
+        )
 
         return results
 

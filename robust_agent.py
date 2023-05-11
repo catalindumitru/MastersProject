@@ -23,7 +23,7 @@ class RobustAgent:
         self.tau = 0.01
         self.rollout_length = 32
         self.gae_tau = 0.95
-        self.entropy_weight = 0  # 0.01
+        self.entropy_weight = 0.01  # 0.01
         self.value_loss_weight = 1
         self.gradient_clip = 0.5
 
