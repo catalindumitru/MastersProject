@@ -27,6 +27,7 @@ class Environment:
         self.Theta = range(theta_count)
 
         self.init_distribution = random_distribution(state_count)
+        self.init_state = Categorical(torch.tensor(self.init_distribution)).sample()
         self.gamma_A = gamma_A
         self.gamma_P = gamma_P
 
@@ -53,14 +54,8 @@ class Environment:
 
         self.R_P = (1 - np.abs(beta)) * self.R_P + beta * self.R_A
 
-    def init_state(self):
-        return self.S[0]
-
     def take_action(self, state, action):
         return Categorical(torch.tensor(self.P[state, action, :])).sample()
-
-    def sample_state(self):
-        return Categorical(torch.tensor(self.init_distribution)).sample()
 
     def sample_theta(self, state):
         return Categorical(torch.tensor(self.mu[state, :])).sample()

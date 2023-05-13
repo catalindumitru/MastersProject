@@ -7,7 +7,7 @@ from environment import Environment
 class Principal:
     def __init__(self, env: Environment) -> None:
         self.env = env
-        self.optimal_policy = None
+        self.optimal_strategy = None
 
     def train(self) -> None:
         state_count = self.env.state_count
@@ -103,9 +103,9 @@ class Principal:
                 for a in self.env.U:
                     pi_P[s, theta, a] = pi[theta, a].X if pi[theta, a].X >= 0 else 0
 
-        self.optimal_policy = pi_P
+        self.optimal_strategy = pi_P
 
-    def get_optimal_policy(self) -> np.ndarray:
-        if self.optimal_policy is None:
+    def get_optimal_strategy(self) -> np.ndarray:
+        if self.optimal_strategy is None:
             raise Exception("Principal not trained yet")
-        return self.optimal_policy
+        return self.optimal_strategy

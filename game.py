@@ -22,7 +22,7 @@ class Game:
         principal = Principal(env)
         principal.train()
 
-        principal_policy_optimal = principal.get_optimal_policy()
+        principal_policy_optimal = principal.get_optimal_strategy()
         principal_policy_noisy = np.zeros(
             (env.state_count, env.theta_count, env.action_count)
         )
