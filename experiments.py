@@ -4,7 +4,7 @@ from pickle import dump
 
 if __name__ == "__main__":
     iterations = 10
-    alphas = [1, 0.5, 0.1, 0.001]
+    alphas = [1, 0.6, 0.3, 0.01, 0]
     results = {}
 
     for alpha in alphas:

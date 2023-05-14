@@ -4,8 +4,7 @@ from torch.distributions import Categorical
 
 from base_robust_agent import BaseRobustAgent
 from base_robust_agent_ppo import BaseRobustAgentPPO
-from storage import Storage
-from utils import to_np, tensor, random_sample
+from utils import tensor
 from environment import Environment
 
 
@@ -14,25 +13,6 @@ class ObliviousRobustAgentPPO(BaseRobustAgent, BaseRobustAgentPPO):
         BaseRobustAgent.__init__(self, env, principal_strategy)
         BaseRobustAgentPPO.__init__(self, 3, env.action_count, self.max_train_steps)
         self.reset_meta_state(principal_strategy)
-
-    def reset_meta_state(self, principal_strategy):
-        self.reset()
-        state = self.state
-        theta = self.theta
-        signal = Categorical(tensor(principal_strategy[state, theta])).sample()
-        self.meta_state = torch.stack((state, signal, theta))
-
-    def next_meta_state(self, action, principal_strategy):
-        state, signal, theta = self.meta_state
-        next_state = self.env.take_action(state, action)
-        next_theta = self.env.sample_theta(next_state)
-        next_signal = Categorical(
-            tensor(principal_strategy[next_state, next_theta])
-        ).sample()
-
-        self.state = next_state
-        self.theta = next_theta
-        self.meta_state = torch.stack((next_state, next_signal, next_theta))
 
     def train_kernel(self, meta_states):
         disturbed_meta_states = []
@@ -43,19 +23,3 @@ class ObliviousRobustAgentPPO(BaseRobustAgent, BaseRobustAgentPPO):
                 )
             )
         return torch.stack(disturbed_meta_states)
-
-    def deployment_kernel(self, meta_state, principal_strategy_disturbed):
-        state, signal, _ = meta_state
-
-        kernel = np.zeros((self.env.theta_count))
-        denominator = 0
-        for t in self.env.Theta:
-            denominator += (
-                principal_strategy_disturbed[state, t, signal] * self.env.mu[state, t]
-            )
-        for t in self.env.Theta:
-            kernel[t] = (
-                principal_strategy_disturbed[state, t, signal] * self.env.mu[state, t]
-            ) / denominator
-
-        return torch.stack((state, signal, Categorical(tensor(kernel)).sample()))

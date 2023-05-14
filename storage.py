@@ -50,12 +50,6 @@ class Storage:
         self._size = 0
 
     def extract(self, keys):
-        # for key in keys:
-        #     print(key, getattr(self, key)[: self.memory_size])
-        #     setattr(self, key, torch.stack(getattr(self, key)[: self.memory_size]))
-
-        # if "state" in keys:
-        #     print(torch.cat(getattr(self, "state"), dim=0))
         data = [getattr(self, k)[: self.memory_size] for k in keys]
         data = map(lambda x: torch.stack(x), data)
         Entry = namedtuple("Entry", keys)

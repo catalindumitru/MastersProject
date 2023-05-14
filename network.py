@@ -18,14 +18,6 @@ class CategoricalActorCriticNet(nn.Module):
         self.actor_body = DummyBody(self.phi_body.feature_dim)
         self.critic_body = DummyBody(self.phi_body.feature_dim)
 
-        # self.phi_body = DummyBody(state_count)
-        # self.actor_body = FCBody(self.phi_body.feature_dim)
-        # self.critic_body = FCBody(self.phi_body.feature_dim)
-
-        # self.phi_body = DummyBody(2)
-        # self.actor_body = DummyBody(2)
-        # self.critic_body = DummyBody(2)
-
         self.fc_action = layer_init(
             nn.Linear(self.actor_body.feature_dim, action_count), 1e-3
         )

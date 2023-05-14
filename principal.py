@@ -53,6 +53,7 @@ class Principal:
         solver.optimize()
         V = [V[s].X for s in self.env.S]
 
+        # Extract the optimal strategy from the primal variables
         pi_P = np.zeros((state_count, theta_count, action_count))
 
         for s in self.env.S:

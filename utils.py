@@ -46,6 +46,15 @@ def noisy_distribution(dist, alpha):
     return noisy_dist
 
 
+def disturb_strategy(env, strategy, alpha):
+    strategy_disturbed = np.zeros((env.state_count, env.theta_count, env.action_count))
+    for s in env.S:
+        for t in env.Theta:
+            strategy_disturbed[s, t] = noisy_distribution(strategy[s, t], alpha)
+
+    return strategy_disturbed
+
+
 def uniform_kernel(theta_count):
     return Categorical(tensor(random_distribution(theta_count))).sample()
 
