@@ -12,7 +12,7 @@ class MindfulRobustAgentPPO(BaseRobustAgent, BaseRobustAgentPPO):
     def __init__(self, env: Environment = None, principal_strategy=None):
         BaseRobustAgent.__init__(self, env, principal_strategy)
         BaseRobustAgentPPO.__init__(self, 3, env.action_count, self.max_train_steps)
-        self.principal_strategy_train = disturb_strategy(env, principal_strategy, 0.5)
+        self.principal_strategy_train = disturb_strategy(env, principal_strategy, 0.4)
         self.reset_meta_state(principal_strategy)
 
     def train_kernel(self, meta_states):

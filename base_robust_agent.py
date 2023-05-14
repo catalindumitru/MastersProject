@@ -1,6 +1,7 @@
 import torch
 from torch.distributions import Categorical
-from numpy import arange, zeros
+from numpy import zeros
+from collections import deque
 
 from environment import Environment
 from base_agent import BaseAgent
@@ -14,6 +15,16 @@ class BaseRobustAgent(BaseAgent):
     def __init__(self, env: Environment = None, principal_strategy=None):
         super().__init__(env, principal_strategy)
         self.max_train_steps = 1000
+
+        # LR Hyperparameters
+        self.i = None
+        self.mu = [0.0 for _ in range(1)]
+        self.j = [0.0 for _ in range(1)]
+        self.recent_losses = [deque(maxlen=25) for i in range(2)]
+        self.beta = list(reversed(range(1, 3)))
+        self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
+        self.tau = 0.01
+        self.loss_bound = 0.2
 
     def reset_meta_state(self, principal_strategy):
         self.reset()

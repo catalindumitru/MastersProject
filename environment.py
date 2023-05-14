@@ -14,7 +14,6 @@ class Environment:
         gamma_A=0.8,
         gamma_P=0.8,
         terminal_states=0,
-        beta=0,
         lb_P=0,
         ub_P=1,
         lb_A=0,
@@ -53,20 +52,13 @@ class Environment:
             self.R_P[t, :, :] = 0
             self.R_A[t, :, :] = 0
 
-        self.R_P = (1 - np.abs(beta)) * self.R_P + beta * self.R_A
-
     def take_action(self, state, action):
         return Categorical(tensor(self.P[state, action, :])).sample()
 
     def sample_theta(self, state):
         return Categorical(tensor(self.mu[state, :])).sample()
-    
+
     def step(self, state, action):
         next_state = self.take_action(state, action)
         next_theta = self.sample_theta(next_state)
         return next_state, next_theta
-
-
-if __name__ == "__main__":
-    env = Environment()
-    print(env.R_P)

@@ -10,16 +10,6 @@ from utils import random_sample, tensor
 
 class BaseRobustAgentPPO:
     def __init__(self, meta_state_dim, action_count, max_train_steps):
-        # LR hyperparameters
-
-        self.i = None
-        self.mu = [0.0 for _ in range(1)]
-        self.j = [0.0 for _ in range(1)]
-        self.recent_losses = [deque(maxlen=25) for i in range(2)]
-        self.beta = list(reversed(range(1, 3)))
-        self.eta = [1e-3 * eta for eta in list(reversed(range(1, 3)))]
-        self.second_order = False
-        self.tau = 0.01
         self.rollout_length = 32
         self.gae_tau = 0.95
         self.entropy_weight = 0.01
@@ -28,7 +18,6 @@ class BaseRobustAgentPPO:
         self.mini_batch_size = 8
         self.target_kl = 0.01
         self.ppo_ratio_clip = 0.2
-        self.loss_bound = 5
 
         self.network = CategoricalActorCriticNet(
             state_dim=meta_state_dim,
