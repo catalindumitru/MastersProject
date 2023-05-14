@@ -1,5 +1,4 @@
 import torch
-from torch.nn.utils import clip_grad_norm_
 from torch.distributions import Categorical
 from numpy import arange, zeros
 
@@ -15,7 +14,7 @@ class BaseRobustAgent(BaseAgent):
     def __init__(self, env: Environment = None, principal_strategy=None):
         super().__init__(env, principal_strategy)
         self.max_train_steps = 1000
-        
+
     def reset_meta_state(self, principal_strategy):
         self.reset()
         state = self.state
@@ -41,11 +40,7 @@ class BaseRobustAgent(BaseAgent):
 
     def train_step(self):
         storage = self.rollout_phase()
-
-        if isinstance(self, BaseRobustAgentA2C):
-            self.a2c_optimise(storage)
-        elif isinstance(self, BaseRobustAgentPPO):
-            self.ppo_optimise(storage)
+        self.optimise(storage)
 
     def rollout_phase(self):
         storage = Storage(self.rollout_length)
@@ -83,109 +78,6 @@ class BaseRobustAgent(BaseAgent):
             storage.ret[i] = returns.detach()
 
         return storage
-
-    def a2c_optimise(self, storage):
-        entries = storage.extract(
-            [
-                "log_pi_a",
-                "v",
-                "ret",
-                "advantage",
-                "entropy",
-                "pi",
-                "meta_state",
-            ]
-        )
-        policy_loss = -(entries.log_pi_a * entries.advantage).mean()
-        value_loss = 0.5 * (entries.ret - entries.v).pow(2).mean()
-        entropy_loss = entries.entropy.mean()
-
-        weights = self.compute_weights()
-        if self.total_steps > 2 * self.max_train_steps / 3:
-            disturbed_meta_states = self.train_kernel(entries.meta_state)
-            robust_loss = self.robust_loss(disturbed_meta_states, entries.pi)
-            self.update_lagrange()
-        else:
-            robust_loss = tensor(0)
-        self.recent_losses[0].append(-policy_loss)
-        self.recent_losses[1].append(-robust_loss)
-        self.optimizer.zero_grad()
-        (
-            policy_loss
-            + robust_loss * weights[1] / weights[0]
-            - self.entropy_weight * entropy_loss
-            + self.value_loss_weight * value_loss
-        ).backward()
-        clip_grad_norm_(self.network.parameters(), self.gradient_clip)
-        self.optimizer.step()
-
-    def ppo_optimise(self, storage):
-        entries = storage.extract(
-            [
-                "log_pi_a",
-                "action",
-                "v",
-                "ret",
-                "advantage",
-                "entropy",
-                "pi",
-                "meta_state",
-            ]
-        )
-        EntryCLS = entries.__class__
-        entries = EntryCLS(*list(map(lambda x: x.detach(), entries)))
-        entries.advantage.copy_(
-            (entries.advantage - entries.advantage.mean()) / entries.advantage.std()
-        )
-
-        for _ in range(self.optimization_epochs):
-            sampler = random_sample(
-                arange(entries.meta_state.size(0)), self.mini_batch_size
-            )
-            for batch_indices in sampler:
-                batch_indices = tensor(batch_indices).long()
-                entry = EntryCLS(*list(map(lambda x: x[batch_indices], entries)))
-
-                prediction = self.network(entry.meta_state, entry.action)
-                ratio = (prediction["log_pi_a"] - entry.log_pi_a).exp()
-                obj = ratio * entry.advantage
-                obj_clipped = (
-                    ratio.clamp(
-                        1.0 - self.ppo_ratio_clip,
-                        1.0 + self.ppo_ratio_clip,
-                    )
-                    * entry.advantage
-                )
-                policy_loss = (
-                    -torch.min(obj, obj_clipped).mean()
-                    - self.entropy_weight * prediction["entropy"].mean()
-                )
-
-                value_loss = 0.5 * (entry.ret - prediction["v"]).pow(2).mean()
-                approx_kl = (entry.log_pi_a - prediction["log_pi_a"]).mean()
-
-                if approx_kl <= 1.5 * self.target_kl:
-                    if self.total_steps > 2 * self.max_train_steps / 3:
-                        weights = self.compute_weights()
-                        disturbed_meta_states = self.train_kernel(entry.meta_state)
-                        robust_loss = self.robust_loss(disturbed_meta_states, entry.pi)
-                        self.recent_losses[0].append(-policy_loss.mean())
-                        self.recent_losses[1].append(robust_loss)
-                        self.actor_opt.zero_grad()
-                        (policy_loss * weights[0] + robust_loss * weights[1]).backward(
-                            retain_graph=True
-                        )
-                        self.actor_opt.step()
-                    else:
-                        self.actor_opt.zero_grad()
-                        policy_loss.backward(retain_graph=True)
-                        self.actor_opt.step()
-                self.critic_opt.zero_grad()
-                value_loss.backward(retain_graph=True)
-                self.critic_opt.step()
-
-        self.lr_scheduler_policy.step()
-        self.lr_scheduler_value.step()
 
     def converged(self, tolerance=0.1, bound=0.01, minimum_updates=5):
         # If not enough updates have been performed, assume not converged
