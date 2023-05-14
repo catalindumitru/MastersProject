@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from utils import random_distribution
 from torch.distributions import Categorical
+from torch import tensor
 
 
 class Environment:
@@ -27,7 +28,7 @@ class Environment:
         self.Theta = range(theta_count)
 
         self.init_distribution = random_distribution(state_count)
-        self.init_state = Categorical(torch.tensor(self.init_distribution)).sample()
+        self.init_state = Categorical(tensor(self.init_distribution)).sample()
         self.gamma_A = gamma_A
         self.gamma_P = gamma_P
 
@@ -55,10 +56,15 @@ class Environment:
         self.R_P = (1 - np.abs(beta)) * self.R_P + beta * self.R_A
 
     def take_action(self, state, action):
-        return Categorical(torch.tensor(self.P[state, action, :])).sample()
+        return Categorical(tensor(self.P[state, action, :])).sample()
 
     def sample_theta(self, state):
-        return Categorical(torch.tensor(self.mu[state, :])).sample()
+        return Categorical(tensor(self.mu[state, :])).sample()
+    
+    def step(self, state, action):
+        next_state = self.take_action(state, action)
+        next_theta = self.sample_theta(next_state)
+        return next_state, next_theta
 
 
 if __name__ == "__main__":

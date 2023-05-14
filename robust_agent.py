@@ -124,7 +124,7 @@ class RobustAgent:
 
     def eval_step(self, obs):
         prediction = self.network(obs)
-        action = to_np(prediction["action"])
+        action = prediction["action"]
         return action
 
     def eval_noisy_episode(self):
@@ -139,7 +139,7 @@ class RobustAgent:
             # theta_disturbed = uniform_kernel(self.env.theta_count)
             theta_disturbed = kernel_without_principal(state, self.env.mu)
             obs = torch.stack((state, theta_disturbed))
-            action = self.eval_step(obs)
+            action = to_np(self.eval_step(obs))
             total_reward_A += discount_A * self.env.R_A[state, action, theta]
             total_reward_P += discount_P * self.env.R_P[state, action, theta]
 

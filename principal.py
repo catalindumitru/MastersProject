@@ -5,11 +5,11 @@ from environment import Environment
 
 
 class Principal:
-    def __init__(self, env: Environment) -> None:
+    def __init__(self, env: Environment):
         self.env = env
         self.optimal_strategy = None
 
-    def train(self) -> None:
+    def train(self):
         state_count = self.env.state_count
         action_count = self.env.action_count
         theta_count = self.env.theta_count

@@ -1,5 +1,7 @@
 from environment import Environment
 from principal import Principal
+from oblivious_robust_agent_a2c import ObliviousRobustAgentA2C
+from oblivious_robust_agent_ppo import ObliviousRobustAgentPPO
 from robust_agent_action import RobustAgentAction
 from robust_agent_action_PPO import RobustAgentActionPPO
 from robust_agent import RobustAgent
@@ -25,18 +27,26 @@ class Game:
         principal = Principal(env)
         principal.train()
 
-        principal_policy_optimal = principal.get_optimal_policy()
-        # principal_policy_noisy = np.zeros(
-        #     (env.state_count, env.theta_count, env.action_count)
-        # )
-        # for s in env.S:
-        #     for t in env.Theta:
-        #         principal_policy_noisy[s, t] = noisy_distribution(
-        #             principal_policy_optimal[s, t], self.alpha
-        #         )
+        principal_policy_optimal = principal.get_optimal_strategy()
+        principal_policy_noisy = np.zeros(
+            (env.state_count, env.theta_count, env.action_count)
+        )
+        for s in env.S:
+            for t in env.Theta:
+                principal_policy_noisy[s, t] = noisy_distribution(
+                    principal_policy_optimal[s, t], self.alpha
+                )
 
-        # agent_bayesian = BayesianAgent(env, principal_policy_noisy)
-        # results["bayesian"] = agent_bayesian.eval_episodes()
+        agent = ObliviousRobustAgentA2C(env, principal_policy_optimal)
+        agent.train()
+        results["oblivious"] = agent.eval_episodes(principal_policy_noisy)
+
+        agent = ObliviousRobustAgentPPO(env, principal_policy_optimal)
+        agent.train()
+        results["oblivious_PPO"] = agent.eval_episodes(principal_policy_noisy)
+
+        # agent_bayesian = BayesianAgent(env, principal_policy_optimal)
+        # results["bayesian"] = agent_bayesian.eval_episodes(principal_policy_noisy)
 
         # agent = RobustAgentPPO(env)
         # agent.train()
@@ -58,16 +68,16 @@ class Game:
         #     principal_policy_noisy
         # )
 
-        agent = RobustAgentAction(env, principal_policy_optimal)
-        agent.train()
-        results["robust_action"] = agent.eval_noisy_episodes()
+        # agent = RobustAgentAction(env, principal_policy_optimal)
+        # agent.train()
+        # results["robust_action"] = agent.eval_noisy_episodes()
 
-        agent = RobustAgentActionPPO(env, principal_policy_optimal)
-        agent.train()
-        results["robust_action_PPO"] = agent.eval_noisy_episodes()
+        # agent = RobustAgentActionPPO(env, principal_policy_optimal)
+        # agent.train()
+        # results["robust_action_PPO"] = agent.eval_noisy_episodes()
 
-        agent = BayesianAgentAction(env, principal_policy_optimal)
-        results["bayesian"] = agent.eval_episodes()
+        # agent = BayesianAgentAction(env, principal_policy_optimal)
+        # results["bayesian"] = agent.eval_episodes()
 
         return results
 

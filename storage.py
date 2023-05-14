@@ -7,10 +7,11 @@ class Storage:
         if keys is None:
             keys = []
         keys = keys + [
+            "meta_state",
             "state",
-            "action",
-            "theta",
             "signal",
+            "theta",
+            "action",
             "reward_A",
             "reward_P",
             "mask",

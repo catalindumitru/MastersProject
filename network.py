@@ -1,5 +1,4 @@
 import torch
-import math
 import torch.nn as nn
 import torch.nn.functional as F
 from utils import tensor
@@ -10,12 +9,12 @@ from utils import layer_init
 class CategoricalActorCriticNet(nn.Module):
     def __init__(
         self,
-        state_count,
+        state_dim,
         action_count,
     ):
         super(CategoricalActorCriticNet, self).__init__()
 
-        self.phi_body = FCBody(2)
+        self.phi_body = FCBody(state_dim)
         self.actor_body = DummyBody(self.phi_body.feature_dim)
         self.critic_body = DummyBody(self.phi_body.feature_dim)
 
@@ -40,8 +39,6 @@ class CategoricalActorCriticNet(nn.Module):
         )
         self.phi_params = list(self.phi_body.parameters())
 
-        # self.to(Config.DEVICE)
-
     def forward(self, obs, action=None):
         obs = tensor(obs)
         phi = self.phi_body(obs)
@@ -60,7 +57,7 @@ class CategoricalActorCriticNet(nn.Module):
             "entropy": entropy,
             "v": v,
             "pi": F.softmax(logits, dim=-1),
-        }  # dist.probs}
+        }
 
     def actor(self, obs):
         obs = tensor(obs)
@@ -71,110 +68,31 @@ class CategoricalActorCriticNet(nn.Module):
 
 
 class DummyBody(nn.Module):
-    def __init__(self, state_count):
+    def __init__(self, state_dim):
         super(DummyBody, self).__init__()
-        self.feature_dim = state_count
+        self.feature_dim = state_dim
 
     def forward(self, x):
         return x.to(torch.float32)
 
 
 class FCBody(nn.Module):
-    def __init__(
-        self, state_dim, hidden_units=(64, 64), gate=F.relu, noisy_linear=False
-    ):
+    def __init__(self, state_dim, hidden_units=(64, 64), gate=F.relu):
         super(FCBody, self).__init__()
         dims = (state_dim,) + hidden_units
-        if noisy_linear:
-            self.layers = nn.ModuleList(
-                [
-                    NoisyLinear(dim_in, dim_out)
-                    for dim_in, dim_out in zip(dims[:-1], dims[1:])
-                ]
-            )
-        else:
-            self.layers = nn.ModuleList(
-                [
-                    layer_init(nn.Linear(dim_in, dim_out))
-                    for dim_in, dim_out in zip(dims[:-1], dims[1:])
-                ]
-            )
+
+        self.layers = nn.ModuleList(
+            [
+                layer_init(nn.Linear(dim_in, dim_out))
+                for dim_in, dim_out in zip(dims[:-1], dims[1:])
+            ]
+        )
 
         self.gate = gate
         self.feature_dim = dims[-1]
-        self.noisy_linear = noisy_linear
-
-    def reset_noise(self):
-        if self.noisy_linear:
-            for layer in self.layers:
-                layer.reset_noise()
 
     def forward(self, x):
         x = x.to(torch.float32)
         for layer in self.layers:
             x = self.gate(layer(x))
         return x
-
-
-class NoisyLinear(nn.Module):
-    def __init__(self, in_features, out_features, std_init=0.4):
-        super(NoisyLinear, self).__init__()
-
-        self.in_features = in_features
-        self.out_features = out_features
-        self.std_init = std_init
-
-        self.weight_mu = nn.Parameter(
-            torch.zeros((out_features, in_features)), requires_grad=True
-        )
-        self.weight_sigma = nn.Parameter(
-            torch.zeros((out_features, in_features)), requires_grad=True
-        )
-        self.register_buffer("weight_epsilon", torch.zeros((out_features, in_features)))
-
-        self.bias_mu = nn.Parameter(torch.zeros(out_features), requires_grad=True)
-        self.bias_sigma = nn.Parameter(torch.zeros(out_features), requires_grad=True)
-        self.register_buffer("bias_epsilon", torch.zeros(out_features))
-
-        self.register_buffer("noise_in", torch.zeros(in_features))
-        self.register_buffer("noise_out_weight", torch.zeros(out_features))
-        self.register_buffer("noise_out_bias", torch.zeros(out_features))
-
-        self.reset_parameters()
-        self.reset_noise()
-
-    def forward(self, x):
-        if self.training:
-            weight = self.weight_mu + self.weight_sigma.mul(self.weight_epsilon)
-            bias = self.bias_mu + self.bias_sigma.mul(self.bias_epsilon)
-        else:
-            weight = self.weight_mu
-            bias = self.bias_mu
-
-        return F.linear(x, weight, bias)
-
-    def reset_parameters(self):
-        mu_range = 1 / math.sqrt(self.weight_mu.size(1))
-
-        self.weight_mu.data.uniform_(-mu_range, mu_range)
-        self.weight_sigma.data.fill_(
-            self.std_init / math.sqrt(self.weight_sigma.size(1))
-        )
-
-        self.bias_mu.data.uniform_(-mu_range, mu_range)
-        self.bias_sigma.data.fill_(self.std_init / math.sqrt(self.bias_sigma.size(0)))
-
-    def reset_noise(self):
-        self.noise_in.normal_(std=0.1)
-        self.noise_out_weight.normal_(std=0.1)
-        self.noise_out_bias.normal_(std=0.1)
-
-        self.weight_epsilon.copy_(
-            self.transform_noise(self.noise_out_weight).ger(
-                self.transform_noise(self.noise_in)
-            )
-        )
-        self.bias_epsilon.copy_(self.transform_noise(self.noise_out_bias))
-
-    def transform_noise(self, x):
-        return x.sign().mul(x.abs().sqrt())
