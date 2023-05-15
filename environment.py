@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 from utils import random_distribution
 from torch.distributions import Categorical
 from torch import tensor
@@ -45,7 +44,7 @@ class Environment:
             low=lb_A, high=ub_A, size=(state_count, action_count, theta_count)
         )
 
-        for t in range(state_count - terminal_states, state_count):  # maybe -1?
+        for t in range(state_count - terminal_states, state_count):
             for a in range(action_count):
                 self.P[t, a, :] = 0
                 self.P[t, a, t] = 1

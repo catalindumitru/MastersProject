@@ -1,4 +1,3 @@
-import numpy as np
 from environment import Environment
 from torch.distributions import Categorical
 from utils import tensor

@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils import tensor
 from torch.distributions import Categorical
-from utils import layer_init
 
 
 class CategoricalActorCriticNet(nn.Module):
@@ -88,3 +87,9 @@ class FCBody(nn.Module):
         for layer in self.layers:
             x = self.gate(layer(x))
         return x
+    
+def layer_init(layer, w_scale=1.0):
+    nn.init.orthogonal_(layer.weight.data)
+    layer.weight.data.mul_(w_scale)
+    nn.init.constant_(layer.bias.data, 0)
+    return layer

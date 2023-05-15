@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 from torch.distributions import Categorical
 
 from base_robust_agent import BaseRobustAgent

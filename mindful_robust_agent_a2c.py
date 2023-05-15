@@ -1,10 +1,8 @@
 import torch
-import numpy as np
-from torch.distributions import Categorical
 
 from base_robust_agent import BaseRobustAgent
 from base_robust_agent_a2c import BaseRobustAgentA2C
-from utils import tensor, disturb_strategy
+from utils import disturb_strategy
 from environment import Environment
 
 

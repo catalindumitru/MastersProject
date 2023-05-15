@@ -35,6 +35,11 @@ class Experiments:
         with open("results.pkl", "wb") as f:
             dump(results, f)
 
+# The try-except block is used to avoid potential errors caused by gurobipy.
+# Because the space dimensions of the environment are very large, 
+# it is possible that the solver cannot find a solution in a reasonable time
+# and times out. In this case, the game is restarted with a fresh environment.
+
 
 if __name__ == "__main__":
     experiments = Experiments()
